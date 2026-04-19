@@ -1,0 +1,319 @@
+.history-page {
+  padding-bottom: 3rem;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2.5rem;
+}
+
+.history-header h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--primary), #8b5cf6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 0.35rem;
+}
+
+.history-header .subtitle {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+/* ---- Widgets ---- */
+.history-widgets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.history-widget {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.history-widget:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.08);
+}
+
+.hw-icon {
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 1rem;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.hw-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.hw-title {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.hw-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+/* ---- Filters ---- */
+.history-filters {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.date-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  padding: 0.75rem 1.25rem;
+}
+
+.filter-icon {
+  color: var(--primary);
+}
+
+.date-filter label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.date-filter input[type="date"] {
+  border: none;
+  background: transparent;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+  cursor: pointer;
+}
+
+.clear-filter {
+  font-size: 0.75rem;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  transition: background 0.2s;
+}
+
+.clear-filter:hover {
+  background: var(--primary-light);
+}
+
+.result-count {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+/* ---- Receipts List ---- */
+.receipts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.receipts-empty {
+  text-align: center;
+  padding: 5rem 2rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  background: var(--card-bg);
+  border-radius: 1.25rem;
+  border: 1px solid var(--border-color);
+}
+
+.receipt-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.receipt-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  border-color: var(--primary);
+}
+
+.receipt-card--open {
+  border-color: var(--primary);
+  box-shadow: 0 4px 20px rgba(var(--primary-rgb), 0.12);
+}
+
+.receipt-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.125rem 1.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.receipt-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.receipt-method-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.receipt-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.receipt-id {
+  font-family: monospace;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+}
+
+.receipt-time {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.receipt-right {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.receipt-method-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  padding: 0.25rem 0.75rem;
+  border-radius: 2rem;
+}
+
+.receipt-total {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.receipt-chevron {
+  color: var(--text-secondary);
+  transition: transform 0.25s ease;
+}
+
+/* ---- Detail Table ---- */
+.receipt-detail {
+  border-top: 1px solid var(--border-color);
+  padding: 1.25rem 1.5rem;
+  animation: expand-in 0.25s ease;
+}
+
+@keyframes expand-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.receipt-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.receipt-items-table th {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.receipt-items-table td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid rgba(var(--border-rgb), 0.5);
+  color: var(--text-primary);
+}
+
+.receipt-items-table tfoot td {
+  border-top: 1px solid var(--border-color);
+  border-bottom: none;
+  padding-top: 0.875rem;
+}
+
+.receipt-grand-total {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.text-right {
+  text-align: right;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 1024px) {
+  .history-widgets {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .history-widgets {
+    grid-template-columns: 1fr;
+  }
+  .receipt-right {
+    gap: 0.75rem;
+  }
+  .receipt-method-label {
+    display: none;
+  }
+}

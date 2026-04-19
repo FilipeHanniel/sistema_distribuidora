@@ -1,0 +1,132 @@
+/* ===== Cross-Sell Popup ===== */
+.cross-sell-popup {
+  position: fixed;
+  top: 80px;
+  left: 20px;
+  z-index: 1000;
+  max-width: 300px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid #f59e0b;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 0.875rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+
+  animation: slideInFromLeft 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.cross-sell-popup.closing {
+  animation: slideOutToLeft 0.3s ease forwards;
+}
+
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-120%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOutToLeft {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-120%);
+  }
+}
+
+.cross-sell-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f59e0b;
+}
+
+.cross-sell-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.cross-sell-product {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  margin-bottom: 0.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cross-sell-product .ai-tag {
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+  color: #fff;
+}
+
+.cross-sell-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.cross-sell-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.cross-sell-close:hover {
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+
+/* Progress bar for auto-dismiss */
+.cross-sell-timer {
+  position: absolute;
+  bottom: 0;
+  left: 4px;
+  right: 0;
+  height: 2px;
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 0 0 var(--radius) 0;
+  overflow: hidden;
+}
+
+.cross-sell-timer-fill {
+  height: 100%;
+  background: #f59e0b;
+  border-radius: 0 0 var(--radius) 0;
+  animation: timerShrink 8s linear forwards;
+}
+
+@keyframes timerShrink {
+  from { width: 100%; }
+  to { width: 0%; }
+}

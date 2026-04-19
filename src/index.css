@@ -1,0 +1,122 @@
+:root {
+  /* Pepsi Blue Theme */
+  --primary: #005CB9;
+  --primary-dark: #001D82;
+  --secondary: #E42229; /* Pepsi Red */
+  
+  /* Light Theme Colors */
+  --bg-main: #F4F7F6;
+  --bg-surface: #FFFFFF;
+  --text-primary: #1F2937;
+  --text-secondary: #4B5563;
+  --border: #E5E7EB;
+  
+  --nav-bg: #FFFFFF;
+  --nav-text: #4B5563;
+  --nav-active-bg: #EEF6FF;
+  --nav-active-text: #005CB9;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  
+  --radius: 0.5rem;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Aliases used by components */
+  --card-bg: #FFFFFF;
+  --border-color: #E5E7EB;
+  --bg-secondary: #F4F7F6;
+  --primary-light: rgba(0, 92, 185, 0.08);
+  --primary-rgb: 0, 92, 185;
+  --border-rgb: 229, 231, 235;
+}
+
+[data-theme='dark'] {
+  /* Dark Theme Colors */
+  --bg-main: #111827;
+  --bg-surface: #1F2937;
+  --text-primary: #F9FAFB;
+  --text-secondary: #9CA3AF;
+  --border: #374151;
+  
+  --nav-bg: #1F2937;
+  --nav-text: #9CA3AF;
+  --nav-active-bg: #001D82;
+  --nav-active-text: #FFFFFF;
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+
+  /* Aliases used by components */
+  --card-bg: #1F2937;
+  --border-color: #374151;
+  --bg-secondary: #111827;
+  --primary-light: rgba(0, 92, 185, 0.15);
+  --border-rgb: 55, 65, 81;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  line-height: 1.5;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Typography */
+h1, h2, h3, h4 {
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+}
+
+/* Utilities */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: #fff;
+}
+.btn-primary:hover {
+  background-color: var(--primary-dark);
+}
+
+.btn-secondary {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.btn-secondary:hover {
+  background-color: var(--bg-main);
+}
+
+.page-container {
+  padding: 2rem;
+  width: 100%;
+}
+
+.card {
+  background-color: var(--bg-surface);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+}

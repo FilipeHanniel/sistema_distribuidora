@@ -1,0 +1,174 @@
+.analytics-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-bottom: 2rem;
+}
+
+/* KPI Cards Section */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+.kpi-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.kpi-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: var(--bg-main);
+}
+
+.kpi-icon.primary { background-color: rgba(0, 92, 185, 0.1); color: var(--primary); }
+.kpi-icon.success { background-color: rgba(16, 185, 129, 0.1); color: #10B981; }
+.kpi-icon.warning { background-color: rgba(245, 158, 11, 0.1); color: #F59E0B; }
+
+.kpi-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.kpi-title {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kpi-value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-top: 0.25rem;
+}
+
+/* Main Dashboard Content */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.chart-card h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Custom Tooltip for Recharts to match Pepsi/Dark/Light theme */
+.custom-tooltip {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  box-shadow: var(--shadow-md);
+}
+
+.custom-tooltip .label {
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.custom-tooltip .value {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+/* Small Lists (Top Sellers, Alerts) */
+.data-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.data-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-item:last-child {
+  border-bottom: none;
+}
+
+.data-item-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.data-item-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.data-item-sub {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.data-item-value {
+  font-weight: bold;
+  color: var(--primary);
+}
+
+/* Alert styles */
+.alert-item {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  background-color: rgba(228, 34, 41, 0.1); /* Pepsi Red light */
+  border-left: 4px solid var(--secondary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.alert-item .data-item-name {
+  color: var(--secondary);
+  font-weight: bold;
+}
+
+.alert-item .data-item-sub {
+  color: var(--text-primary);
+}
