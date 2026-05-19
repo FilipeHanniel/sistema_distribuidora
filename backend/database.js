@@ -16,6 +16,7 @@ const initDB = () => {
       email TEXT,
       phone TEXT,
       plan TEXT DEFAULT 'basic',
+      monthlyAmount REAL DEFAULT 0,
       subscriptionStatus TEXT DEFAULT 'active',
       subscriptionDueDate TEXT,
       notes TEXT,
@@ -88,8 +89,22 @@ const initDB = () => {
     )
   `).run();
 
+  // Tabela de Cobranças/Pagamentos
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      amount REAL NOT NULL,
+      dueDate TEXT,
+      paidAt TEXT,
+      notes TEXT,
+      createdAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
   // ============================================================
-  // MIGRAÇÕES PARA BANCOS EXISTENTES
+  // MIGRAÇÕES
   // ============================================================
   const migrations = [
     'ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1',
@@ -101,34 +116,52 @@ const initDB = () => {
     'ALTER TABLE sales ADD COLUMN userId TEXT',
     'ALTER TABLE sales ADD COLUMN establishmentId TEXT',
     'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
   ];
   for (const sql of migrations) {
     try { db.prepare(sql).run(); } catch (e) {}
   }
 
   // ============================================================
-  // ESTABELECIMENTO PADRÃO (para dados legados)
+  // ESTABELECIMENTO PADRÃO (dados legados)
   // ============================================================
   const DEFAULT_EST_ID = 'default-establishment-1';
   const defaultEst = db.prepare('SELECT id FROM establishments WHERE id = ?').get(DEFAULT_EST_ID);
   if (!defaultEst) {
-    const dueDate = new Date();
-    dueDate.setFullYear(dueDate.getFullYear() + 1);
+    const dueDate = addOneMonth(new Date().toISOString());
     db.prepare(`
-      INSERT INTO establishments (id, name, ownerName, plan, subscriptionStatus, subscriptionDueDate, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(DEFAULT_EST_ID, 'Estabelecimento Padrão', 'Administrador', 'basic', 'active',
-      dueDate.toISOString(), new Date().toISOString());
+      INSERT INTO establishments (id, name, ownerName, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(DEFAULT_EST_ID, 'Estabelecimento Padrão', 'Gestor Padrão', 'basic', 0, 'active',
+      dueDate, new Date().toISOString());
   }
 
-  // Migrar roles legados: admin→gestor, staff→operador
+  // Migrar roles legados
   try {
-    db.prepare("UPDATE users SET role = 'gestor' WHERE role = 'admin' AND (establishmentId IS NULL OR establishmentId = ?) AND role != 'superadmin'").run(DEFAULT_EST_ID);
-    db.prepare("UPDATE users SET role = 'operador' WHERE role = 'staff' AND (establishmentId IS NULL OR establishmentId = ?)").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE users SET role = 'gestor' WHERE role = 'admin' AND role != 'superadmin'").run();
+    db.prepare("UPDATE users SET role = 'operador' WHERE role = 'staff'").run();
     db.prepare("UPDATE users SET establishmentId = ? WHERE establishmentId IS NULL AND role != 'superadmin'").run(DEFAULT_EST_ID);
     db.prepare("UPDATE products SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
     db.prepare("UPDATE sales SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
     db.prepare("UPDATE ai_suggestions SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
+  } catch (e) {}
+
+  // ============================================================
+  // RENOMEAR USUÁRIO 'admin' PARA 'gestor' (migração de credencial)
+  // ============================================================
+  try {
+    const adminUser = db.prepare("SELECT id FROM users WHERE username = 'admin' AND role = 'gestor' AND isDeleted = 0").get();
+    const gestorAlready = db.prepare("SELECT id FROM users WHERE username = 'gestor' AND isDeleted = 0").get();
+
+    if (adminUser && !gestorAlready) {
+      const salt = bcrypt.genSaltSync(10);
+      db.prepare("UPDATE users SET username = 'gestor', name = 'Gestor Padrão', password = ? WHERE id = ?")
+        .run(bcrypt.hashSync('gestor123', salt), adminUser.id);
+      console.log('🔄 Login "admin" renomeado para "gestor" (senha: gestor123)');
+    } else if (adminUser && gestorAlready) {
+      // Desativar o 'admin' duplicado
+      db.prepare("UPDATE users SET isDeleted = 1 WHERE username = 'admin' AND role = 'gestor'").run();
+    }
   } catch (e) {}
 
   // ============================================================
@@ -142,10 +175,10 @@ const initDB = () => {
       INSERT INTO users (id, username, password, name, role, active, isDeleted, createdAt)
       VALUES ('superadmin-uuid-1', 'superadmin', ?, 'Super Administrador', 'superadmin', 1, 0, ?)
     `).run(bcrypt.hashSync(SUPERADMIN_PWD, salt), new Date().toISOString());
-    console.log('🔑 SuperAdmin criado: superadmin / ' + SUPERADMIN_PWD);
+    console.log('🔑 SuperAdmin: superadmin / ' + SUPERADMIN_PWD);
   }
 
-  // Criar gestor padrão se não existir nenhum no estabelecimento padrão
+  // Criar gestor padrão se nenhum existir no estabelecimento padrão
   const gestorCount = db.prepare(
     "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'gestor' AND isDeleted = 0"
   ).get(DEFAULT_EST_ID);
@@ -161,6 +194,16 @@ const initDB = () => {
   console.log('Banco de Dados SQLite conectado e tabelas verificadas!');
 };
 
+// Avança a data em 1 mês (mantendo o dia, com tratamento de fim de mês)
+function addOneMonth(isoDateStr) {
+  const d = new Date(isoDateStr);
+  const originalDay = d.getDate();
+  d.setMonth(d.getMonth() + 1);
+  if (d.getDate() !== originalDay) d.setDate(0); // Ex.: 31/jan → 28/fev
+  return d.toISOString();
+}
+
 initDB();
 
 module.exports = db;
+module.exports.addOneMonth = addOneMonth;

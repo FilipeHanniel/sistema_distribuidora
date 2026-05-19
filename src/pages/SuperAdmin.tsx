@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Building2, Users, TrendingUp, ShieldCheck, ShieldAlert, ShieldX,
+  Building2, Users, TrendingUp, ShieldCheck, ShieldX,
   Plus, Edit2, Trash2, RefreshCw, Mail, Phone, Calendar,
-  DollarSign, ShoppingCart, Eye, Crown, AlertTriangle, CheckCircle2
+  Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
+  CreditCard, Receipt, ChevronRight, Banknote, X
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import type { Establishment } from '../types';
@@ -23,51 +24,62 @@ const formatDate = (iso?: string) => {
   return new Date(iso).toLocaleDateString('pt-BR');
 };
 
+const formatDateTime = (iso?: string) => {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
 const getDueDays = (iso?: string) => {
   if (!iso) return null;
-  const diff = Math.round((new Date(iso).getTime() - Date.now()) / 86400000);
-  return diff;
+  return Math.round((new Date(iso).getTime() - Date.now()) / 86400000);
 };
 
 const PLAN_LABELS: Record<string, string> = { basic: 'Básico', premium: 'Premium', enterprise: 'Enterprise' };
 const STATUS_LABELS: Record<string, string> = { active: 'Ativo', overdue: 'Em Atraso', suspended: 'Suspenso' };
 
 interface Stats {
-  total: number;
-  active: number;
-  overdue: number;
-  suspended: number;
-  totalUsers: number;
-  totalRevenue: number;
-  totalSales: number;
+  total: number; active: number; overdue: number; suspended: number;
+  totalUsers: number; totalRevenue: number; monthRevenue: number;
 }
 
-interface EstUser {
-  id: string;
-  username: string;
-  name: string;
-  role: string;
-  active: number;
+interface EstUser { id: string; username: string; name: string; role: string; active: number; }
+
+interface Payment {
+  id: string; establishmentId: string; amount: number;
+  dueDate?: string; paidAt?: string; notes?: string; createdAt: string;
 }
+
+type Tab = 'establishments' | 'billing';
 
 const emptyForm = {
   name: '', ownerName: '', email: '', phone: '', plan: 'basic' as const,
-  subscriptionStatus: 'active' as const, subscriptionDueDate: '', notes: '',
+  monthlyAmount: '', subscriptionStatus: 'active' as const, subscriptionDueDate: '', notes: '',
   gestorUsername: '', gestorPassword: '', gestorName: '',
 };
 
 export default function SuperAdmin() {
+  const [tab, setTab] = useState<Tab>('establishments');
   const [establishments, setEstablishments] = useState<Establishment[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Modals
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEst, setEditingEst] = useState<Establishment | null>(null);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
+  const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
+
   const [selectedEst, setSelectedEst] = useState<Establishment | null>(null);
   const [estUsers, setEstUsers] = useState<EstUser[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+
+  // Forms
   const [formData, setFormData] = useState({ ...emptyForm });
   const [subData, setSubData] = useState({ subscriptionStatus: 'active', subscriptionDueDate: '' });
+  const [payForm, setPayForm] = useState({ amount: '', notes: '' });
+  const [payFormOpen, setPayFormOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -84,6 +96,7 @@ export default function SuperAdmin() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ---- Handlers ----
   const openCreate = () => {
     setEditingEst(null);
     const nextMonth = new Date();
@@ -96,7 +109,9 @@ export default function SuperAdmin() {
     setEditingEst(est);
     setFormData({
       name: est.name, ownerName: est.ownerName || '', email: est.email || '',
-      phone: est.phone || '', plan: est.plan, subscriptionStatus: est.subscriptionStatus,
+      phone: est.phone || '', plan: est.plan,
+      monthlyAmount: (est as any).monthlyAmount ? String((est as any).monthlyAmount) : '',
+      subscriptionStatus: est.subscriptionStatus,
       subscriptionDueDate: est.subscriptionDueDate ? est.subscriptionDueDate.split('T')[0] : '',
       notes: est.notes || '', gestorUsername: '', gestorPassword: '', gestorName: '',
     });
@@ -119,34 +134,37 @@ export default function SuperAdmin() {
     if (res.ok) setEstUsers(await res.json());
   };
 
+  const openBilling = async (est: Establishment) => {
+    setSelectedEst(est);
+    setPayForm({ amount: (est as any).monthlyAmount ? String((est as any).monthlyAmount) : '', notes: '' });
+    setPayFormOpen(false);
+    setIsBillingModalOpen(true);
+    setPaymentLoading(true);
+    const res = await fetch(`${API}/admin/establishments/${est.id}/payments`, { headers: getHeaders() });
+    if (res.ok) setPayments(await res.json());
+    setPaymentLoading(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const dueDateISO = formData.subscriptionDueDate ? new Date(formData.subscriptionDueDate).toISOString() : undefined;
-    if (editingEst) {
-      const res = await fetch(`${API}/admin/establishments/${editingEst.id}`, {
-        method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify({ ...formData, subscriptionDueDate: dueDateISO }),
-      });
-      if (res.ok) { setIsFormOpen(false); loadData(); }
-      else { const d = await res.json(); alert(d.error); }
-    } else {
-      const res = await fetch(`${API}/admin/establishments`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ ...formData, subscriptionDueDate: dueDateISO }),
-      });
-      if (res.ok) { setIsFormOpen(false); loadData(); }
-      else { const d = await res.json(); alert(d.error); }
-    }
+    const endpoint = editingEst
+      ? `${API}/admin/establishments/${editingEst.id}`
+      : `${API}/admin/establishments`;
+    const method = editingEst ? 'PUT' : 'POST';
+    const res = await fetch(endpoint, {
+      method, headers: getHeaders(),
+      body: JSON.stringify({ ...formData, subscriptionDueDate: dueDateISO }),
+    });
+    if (res.ok) { setIsFormOpen(false); loadData(); }
+    else { const d = await res.json(); alert(d.error); }
   };
 
   const handleSubSave = async () => {
     if (!selectedEst) return;
     const dueDateISO = subData.subscriptionDueDate ? new Date(subData.subscriptionDueDate).toISOString() : undefined;
     const res = await fetch(`${API}/admin/establishments/${selectedEst.id}/subscription`, {
-      method: 'PATCH',
-      headers: getHeaders(),
+      method: 'PATCH', headers: getHeaders(),
       body: JSON.stringify({ ...subData, subscriptionDueDate: dueDateISO }),
     });
     if (res.ok) { setIsSubModalOpen(false); loadData(); }
@@ -154,27 +172,49 @@ export default function SuperAdmin() {
 
   const handleDelete = async (est: Establishment) => {
     if (!confirm(`Excluir "${est.name}"? Todos os usuários serão desativados.`)) return;
-    const res = await fetch(`${API}/admin/establishments/${est.id}`, {
-      method: 'DELETE', headers: getHeaders(),
-    });
+    const res = await fetch(`${API}/admin/establishments/${est.id}`, { method: 'DELETE', headers: getHeaders() });
     if (res.ok) loadData();
   };
 
-  const renderDueInfo = (est: Establishment) => {
+  const handleRegisterPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEst) return;
+    const res = await fetch(`${API}/admin/establishments/${selectedEst.id}/payments`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ amount: parseFloat(payForm.amount), notes: payForm.notes }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setPayFormOpen(false);
+      // Recarregar pagamentos e dados
+      const paymentsRes = await fetch(`${API}/admin/establishments/${selectedEst.id}/payments`, { headers: getHeaders() });
+      if (paymentsRes.ok) setPayments(await paymentsRes.json());
+      loadData();
+      alert(data.message);
+    } else {
+      const d = await res.json(); alert(d.error);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId: string) => {
+    if (!confirm('Remover este registro de pagamento?')) return;
+    const res = await fetch(`${API}/admin/payments/${paymentId}`, { method: 'DELETE', headers: getHeaders() });
+    if (res.ok && selectedEst) {
+      const paymentsRes = await fetch(`${API}/admin/establishments/${selectedEst.id}/payments`, { headers: getHeaders() });
+      if (paymentsRes.ok) setPayments(await paymentsRes.json());
+    }
+  };
+
+  // ---- UI helpers ----
+  const renderDueBadge = (est: Establishment) => {
     const days = getDueDays(est.subscriptionDueDate);
     if (days === null) return null;
-    let cls = '';
-    let icon = <Calendar size={14} />;
-    if (days < 0) { cls = 'overdue'; icon = <AlertTriangle size={14} />; }
-    else if (days <= 7) { cls = 'warning'; icon = <AlertTriangle size={14} />; }
-    return (
-      <div className={`est-due-info ${cls}`}>
-        {icon}
-        {days < 0 ? `Vencido há ${Math.abs(days)} dias` :
-         days === 0 ? 'Vence hoje!' :
-         `Vence em ${days} dias (${formatDate(est.subscriptionDueDate)})`}
-      </div>
-    );
+    let cls = ''; let msg = '';
+    if (days < 0) { cls = 'overdue'; msg = `Vencido há ${Math.abs(days)}d`; }
+    else if (days === 0) { cls = 'warning'; msg = 'Vence hoje!'; }
+    else if (days <= 7) { cls = 'warning'; msg = `Vence em ${days}d`; }
+    else { msg = `Vence em ${days}d`; }
+    return <span className={`due-badge ${cls}`}><Calendar size={11} />{msg}</span>;
   };
 
   const statCards = stats ? [
@@ -182,24 +222,22 @@ export default function SuperAdmin() {
     { label: 'Assinaturas Ativas', value: stats.active, icon: <CheckCircle2 size={20} />, color: 'green' },
     { label: 'Em Atraso', value: stats.overdue, icon: <AlertTriangle size={20} />, color: 'amber' },
     { label: 'Suspensos', value: stats.suspended, icon: <ShieldX size={20} />, color: 'red' },
-    { label: 'Total de Usuários', value: stats.totalUsers, icon: <Users size={20} />, color: 'purple' },
-    { label: 'Faturamento Total', value: formatCurrency(stats.totalRevenue), icon: <TrendingUp size={20} />, color: 'teal' },
+    { label: 'Receita do Mês', value: formatCurrency(stats.monthRevenue), icon: <TrendingUp size={20} />, color: 'teal' },
+    { label: 'Receita Total (assin.)', value: formatCurrency(stats.totalRevenue), icon: <DollarSign size={20} />, color: 'purple' },
   ] : [];
 
   return (
     <div className="page-container superadmin-page">
+
+      {/* Header */}
       <div className="sa-header">
         <div>
-          <h1><Crown size={28} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 8 }} />Painel Super Admin</h1>
-          <p className="subtitle">Gestão centralizada de todos os estabelecimentos e assinaturas</p>
+          <h1><Crown size={26} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 8 }} />Painel Super Admin</h1>
+          <p className="subtitle">Gestão centralizada de estabelecimentos, assinaturas e cobranças</p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn btn-secondary" onClick={loadData}>
-            <RefreshCw size={16} /> Atualizar
-          </button>
-          <button className="btn btn-primary" onClick={openCreate}>
-            <Plus size={16} /> Novo Estabelecimento
-          </button>
+          <button className="btn btn-secondary" onClick={loadData}><RefreshCw size={16} /> Atualizar</button>
+          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Novo Estabelecimento</button>
         </div>
       </div>
 
@@ -216,92 +254,152 @@ export default function SuperAdmin() {
         ))}
       </div>
 
-      {/* Establishments Grid */}
-      <div className="sa-toolbar">
-        <h2>Estabelecimentos ({establishments.length})</h2>
+      {/* Tabs */}
+      <div className="sa-tabs">
+        <button className={`sa-tab ${tab === 'establishments' ? 'active' : ''}`} onClick={() => setTab('establishments')}>
+          <Building2 size={16} /> Estabelecimentos
+        </button>
+        <button className={`sa-tab ${tab === 'billing' ? 'active' : ''}`} onClick={() => setTab('billing')}>
+          <CreditCard size={16} /> Cobranças
+        </button>
       </div>
 
-      {loading ? (
-        <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /><p>Carregando...</p></div>
-      ) : establishments.length === 0 ? (
-        <div className="sa-empty">
-          <Building2 size={48} style={{ opacity: 0.3 }} />
-          <p>Nenhum estabelecimento cadastrado.</p>
-          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Criar primeiro</button>
-        </div>
-      ) : (
-        <div className="est-grid">
-          {establishments.map(est => {
-            const days = getDueDays(est.subscriptionDueDate);
-            return (
-              <div key={est.id} className="est-card">
-                <div className="est-card-top">
-                  <div className="est-avatar">{est.name[0].toUpperCase()}</div>
-                  <div className="est-badges">
-                    <span className={`badge badge-plan-${est.plan}`}>{PLAN_LABELS[est.plan] || est.plan}</span>
-                    <span className={`badge badge-sub-${est.subscriptionStatus}`}>{STATUS_LABELS[est.subscriptionStatus]}</span>
+      {/* ===== TAB: ESTABELECIMENTOS ===== */}
+      {tab === 'establishments' && (
+        loading ? (
+          <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /><p>Carregando...</p></div>
+        ) : establishments.length === 0 ? (
+          <div className="sa-empty">
+            <Building2 size={48} style={{ opacity: 0.3 }} />
+            <p>Nenhum estabelecimento cadastrado.</p>
+            <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Criar primeiro</button>
+          </div>
+        ) : (
+          <div className="est-grid">
+            {establishments.map(est => {
+              const days = getDueDays(est.subscriptionDueDate);
+              const lastPay = (est as any).lastPayment;
+              return (
+                <div key={est.id} className={`est-card ${est.subscriptionStatus === 'suspended' ? 'est-card--suspended' : ''}`}>
+                  <div className="est-card-top">
+                    <div className="est-avatar">{est.name[0].toUpperCase()}</div>
+                    <div className="est-badges">
+                      <span className={`badge badge-plan-${est.plan}`}>{PLAN_LABELS[est.plan] || est.plan}</span>
+                      <span className={`badge badge-sub-${est.subscriptionStatus}`}>{STATUS_LABELS[est.subscriptionStatus]}</span>
+                    </div>
+                  </div>
+
+                  <div className="est-name">{est.name}</div>
+                  {est.ownerName && <div className="est-owner">{est.ownerName}</div>}
+                  {est.email && <div className="est-contact"><Mail size={12} />{est.email}</div>}
+                  {est.phone && <div className="est-contact"><Phone size={12} />{est.phone}</div>}
+
+                  <div className="est-meta">
+                    <div className="est-meta-item">
+                      <span className="est-meta-label">Usuários</span>
+                      <span className="est-meta-value">{(est as any).userCount ?? 0}</span>
+                    </div>
+                    <div className="est-meta-item">
+                      <span className="est-meta-label">Vendas</span>
+                      <span className="est-meta-value">{(est as any).salesCount ?? 0}</span>
+                    </div>
+                    <div className="est-meta-item">
+                      <span className="est-meta-label">Mensal</span>
+                      <span className="est-meta-value" style={{ fontSize: '0.8rem' }}>
+                        {(est as any).monthlyAmount ? formatCurrency((est as any).monthlyAmount) : '—'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="est-due-row">
+                    {renderDueBadge(est)}
+                    {lastPay && (
+                      <span className="last-pay-info">
+                        <CheckCircle2 size={11} /> Pago {formatDate(lastPay.paidAt)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="est-actions">
+                    <button className="btn btn-secondary btn-sm" onClick={() => openUsersModal(est)}><Eye size={13} /> Usuários</button>
+                    <button className="btn btn-billing btn-sm" onClick={() => openBilling(est)}><DollarSign size={13} /> Cobranças</button>
+                    <button className={`btn btn-sm ${days !== null && days < 0 ? 'btn-danger' : 'btn-secondary'}`} onClick={() => openSubModal(est)}>
+                      <ShieldCheck size={13} /> Assinatura
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => openEdit(est)}><Edit2 size={13} /></button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDelete(est)}><Trash2 size={13} /></button>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )
+      )}
 
-                <div className="est-name">{est.name}</div>
-                {est.ownerName && <div className="est-owner">{est.ownerName}</div>}
-                {est.email && (
-                  <div className="est-contact"><Mail size={12} />{est.email}</div>
-                )}
-                {est.phone && (
-                  <div className="est-contact"><Phone size={12} />{est.phone}</div>
-                )}
-
-                <div className="est-meta">
-                  <div className="est-meta-item">
-                    <span className="est-meta-label">Usuários</span>
-                    <span className="est-meta-value">{est.userCount ?? 0}</span>
-                  </div>
-                  <div className="est-meta-item">
-                    <span className="est-meta-label">Vendas</span>
-                    <span className="est-meta-value">{est.salesCount ?? 0}</span>
-                  </div>
-                  <div className="est-meta-item">
-                    <span className="est-meta-label">Mês</span>
-                    <span className="est-meta-value" style={{ fontSize: '0.875rem' }}>
-                      {formatCurrency(est.revenueMonth ?? 0)}
-                    </span>
-                  </div>
-                </div>
-
-                {renderDueInfo(est)}
-
-                <div className="est-actions">
-                  <button className="btn btn-secondary" onClick={() => openUsersModal(est)} title="Ver usuários">
-                    <Eye size={14} /> Usuários
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => openSubModal(est)}
-                    title="Gerenciar assinatura"
-                    style={{ color: days !== null && days < 0 ? '#dc2626' : undefined }}
-                  >
-                    <ShieldCheck size={14} /> Assinatura
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => openEdit(est)} title="Editar">
-                    <Edit2 size={14} />
-                  </button>
-                  <button className="btn btn-danger" onClick={() => handleDelete(est)} title="Excluir">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+      {/* ===== TAB: COBRANÇAS (visão geral) ===== */}
+      {tab === 'billing' && (
+        <div className="billing-overview">
+          {loading ? (
+            <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /></div>
+          ) : (
+            <table className="billing-table">
+              <thead>
+                <tr>
+                  <th>Estabelecimento</th>
+                  <th>Plano</th>
+                  <th>Mensalidade</th>
+                  <th>Status</th>
+                  <th>Próximo Vencimento</th>
+                  <th>Último Pagamento</th>
+                  <th className="text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {establishments.map(est => {
+                  const days = getDueDays(est.subscriptionDueDate);
+                  const lastPay = (est as any).lastPayment;
+                  return (
+                    <tr key={est.id} className={est.subscriptionStatus === 'suspended' ? 'row-suspended' : days !== null && days < 0 ? 'row-overdue' : ''}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{est.name}</div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{est.ownerName}</div>
+                      </td>
+                      <td><span className={`badge badge-plan-${est.plan}`}>{PLAN_LABELS[est.plan]}</span></td>
+                      <td>{(est as any).monthlyAmount ? formatCurrency((est as any).monthlyAmount) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</td>
+                      <td><span className={`badge badge-sub-${est.subscriptionStatus}`}>{STATUS_LABELS[est.subscriptionStatus]}</span></td>
+                      <td>
+                        <div style={{ fontWeight: days !== null && days < 0 ? 700 : 400, color: days !== null && days < 0 ? '#dc2626' : undefined }}>
+                          {formatDate(est.subscriptionDueDate)}
+                        </div>
+                        {days !== null && <div style={{ fontSize: '0.72rem', color: days < 0 ? '#dc2626' : 'var(--text-secondary)' }}>
+                          {days < 0 ? `${Math.abs(days)}d atraso` : days === 0 ? 'hoje' : `em ${days}d`}
+                        </div>}
+                      </td>
+                      <td>
+                        {lastPay ? (
+                          <div>
+                            <div style={{ fontWeight: 600, color: '#16a34a' }}>{formatCurrency(lastPay.amount)}</div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{formatDate(lastPay.paidAt)}</div>
+                          </div>
+                        ) : <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Nenhum</span>}
+                      </td>
+                      <td className="text-right">
+                        <button className="btn btn-billing btn-sm" onClick={() => openBilling(est)}>
+                          <Receipt size={13} /> Ver Cobranças
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
-      {/* ---- Modal: Criar / Editar Estabelecimento ---- */}
-      <Modal
-        isOpen={isFormOpen}
-        onClose={() => setIsFormOpen(false)}
-        title={editingEst ? `Editar — ${editingEst.name}` : 'Novo Estabelecimento'}
-      >
+      {/* ===== MODAL: CRIAR / EDITAR ESTABELECIMENTO ===== */}
+      <Modal isOpen={isFormOpen} onClose={() => setIsFormOpen(false)}
+        title={editingEst ? `Editar — ${editingEst.name}` : 'Novo Estabelecimento'}>
         <form onSubmit={handleSubmit}>
           <div className="form-section-title">Dados do Estabelecimento</div>
           <div className="form-group">
@@ -343,6 +441,12 @@ export default function SuperAdmin() {
           </div>
           <div className="form-row">
             <div className="form-group">
+              <label>Valor Mensal (R$)</label>
+              <input className="form-control" type="number" step="0.01" value={formData.monthlyAmount}
+                onChange={e => setFormData(p => ({ ...p, monthlyAmount: e.target.value }))}
+                placeholder="Ex: 97.00" />
+            </div>
+            <div className="form-group">
               <label>Status da Assinatura</label>
               <select className="form-control" value={formData.subscriptionStatus}
                 onChange={e => setFormData(p => ({ ...p, subscriptionStatus: e.target.value as any }))}>
@@ -351,11 +455,14 @@ export default function SuperAdmin() {
                 <option value="suspended">Suspenso</option>
               </select>
             </div>
-            <div className="form-group">
-              <label>Vencimento da Assinatura</label>
-              <input className="form-control" type="date" value={formData.subscriptionDueDate}
-                onChange={e => setFormData(p => ({ ...p, subscriptionDueDate: e.target.value }))} />
-            </div>
+          </div>
+          <div className="form-group">
+            <label>Vencimento da Assinatura</label>
+            <input className="form-control" type="date" value={formData.subscriptionDueDate}
+              onChange={e => setFormData(p => ({ ...p, subscriptionDueDate: e.target.value }))} />
+            <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+              Calculado automaticamente como 1 mês após o cadastro
+            </small>
           </div>
           <div className="form-group">
             <label>Observações</label>
@@ -399,12 +506,9 @@ export default function SuperAdmin() {
         </form>
       </Modal>
 
-      {/* ---- Modal: Gerenciar Assinatura ---- */}
-      <Modal
-        isOpen={isSubModalOpen}
-        onClose={() => setIsSubModalOpen(false)}
-        title={`Assinatura — ${selectedEst?.name}`}
-      >
+      {/* ===== MODAL: ASSINATURA ===== */}
+      <Modal isOpen={isSubModalOpen} onClose={() => setIsSubModalOpen(false)}
+        title={`Assinatura — ${selectedEst?.name}`}>
         <div className="form-group">
           <label>Status da Assinatura</label>
           <select className="form-control" value={subData.subscriptionStatus}
@@ -425,17 +529,12 @@ export default function SuperAdmin() {
         </div>
       </Modal>
 
-      {/* ---- Modal: Usuários do Estabelecimento ---- */}
-      <Modal
-        isOpen={isUsersModalOpen}
-        onClose={() => setIsUsersModalOpen(false)}
-        title={`Usuários — ${selectedEst?.name}`}
-      >
+      {/* ===== MODAL: USUÁRIOS ===== */}
+      <Modal isOpen={isUsersModalOpen} onClose={() => setIsUsersModalOpen(false)}
+        title={`Usuários — ${selectedEst?.name}`}>
         <div className="est-users-list">
           {estUsers.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>
-              Nenhum usuário encontrado.
-            </p>
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>Nenhum usuário.</p>
           ) : estUsers.map(u => (
             <div key={u.id} className="est-user-row">
               <div className="est-user-avatar">{u.name[0].toUpperCase()}</div>
@@ -443,9 +542,7 @@ export default function SuperAdmin() {
                 <div className="est-user-name">{u.name}</div>
                 <div className="est-user-username">@{u.username}</div>
               </div>
-              <span className={`est-user-role role-${u.role}`}>
-                {u.role === 'gestor' ? 'Gestor' : 'Operador'}
-              </span>
+              <span className={`est-user-role role-${u.role}`}>{u.role === 'gestor' ? 'Gestor' : 'Operador'}</span>
               <span style={{ fontSize: '0.75rem', color: u.active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
                 {u.active ? 'Ativo' : 'Inativo'}
               </span>
@@ -454,6 +551,115 @@ export default function SuperAdmin() {
         </div>
         <div className="form-actions" style={{ marginTop: '1rem' }}>
           <button className="btn btn-secondary" onClick={() => setIsUsersModalOpen(false)}>Fechar</button>
+        </div>
+      </Modal>
+
+      {/* ===== MODAL: COBRANÇAS ===== */}
+      <Modal isOpen={isBillingModalOpen} onClose={() => setIsBillingModalOpen(false)}
+        title={`Cobranças — ${selectedEst?.name}`}>
+
+        {/* Resumo da assinatura */}
+        {selectedEst && (
+          <div className="billing-summary">
+            <div className="billing-summary-item">
+              <span className="bs-label">Plano</span>
+              <span className="bs-value">{PLAN_LABELS[(selectedEst as any).plan] || selectedEst.plan}</span>
+            </div>
+            <div className="billing-summary-item">
+              <span className="bs-label">Mensalidade</span>
+              <span className="bs-value highlight">
+                {(selectedEst as any).monthlyAmount ? formatCurrency((selectedEst as any).monthlyAmount) : 'Não definida'}
+              </span>
+            </div>
+            <div className="billing-summary-item">
+              <span className="bs-label">Status</span>
+              <span className={`badge badge-sub-${selectedEst.subscriptionStatus}`}>
+                {STATUS_LABELS[selectedEst.subscriptionStatus]}
+              </span>
+            </div>
+            <div className="billing-summary-item">
+              <span className="bs-label">Próximo Vencimento</span>
+              <span className={`bs-value ${getDueDays(selectedEst.subscriptionDueDate) !== null && getDueDays(selectedEst.subscriptionDueDate)! < 0 ? 'overdue' : ''}`}>
+                {formatDate(selectedEst.subscriptionDueDate)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Botão registrar pagamento */}
+        {!payFormOpen && (
+          <button className="btn btn-primary" style={{ width: '100%', marginBottom: '1rem', justifyContent: 'center' }}
+            onClick={() => setPayFormOpen(true)}>
+            <DollarSign size={16} /> Registrar Pagamento Recebido
+          </button>
+        )}
+
+        {/* Formulário de pagamento */}
+        {payFormOpen && (
+          <form onSubmit={handleRegisterPayment} className="pay-form">
+            <div className="pay-form-header">
+              <span>Registrar Pagamento</span>
+              <button type="button" className="pay-form-close" onClick={() => setPayFormOpen(false)}><X size={16} /></button>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Valor Recebido (R$) *</label>
+                <input className="form-control" type="number" step="0.01" required value={payForm.amount}
+                  onChange={e => setPayForm(p => ({ ...p, amount: e.target.value }))}
+                  placeholder="Ex: 97.00" />
+              </div>
+              <div className="form-group">
+                <label>Observação</label>
+                <input className="form-control" value={payForm.notes}
+                  onChange={e => setPayForm(p => ({ ...p, notes: e.target.value }))}
+                  placeholder="Ex: PIX, transferência..." />
+              </div>
+            </div>
+            <div className="pay-form-info">
+              <CheckCircle2 size={14} />
+              Ao confirmar: assinatura será marcada como <strong>Ativa</strong> e o vencimento avança <strong>1 mês</strong> automaticamente.
+            </div>
+            <div className="form-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setPayFormOpen(false)}>Cancelar</button>
+              <button type="submit" className="btn btn-primary"><DollarSign size={15} /> Confirmar Pagamento</button>
+            </div>
+          </form>
+        )}
+
+        {/* Histórico */}
+        <div className="billing-history-label">Histórico de Pagamentos</div>
+        {paymentLoading ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Carregando...</div>
+        ) : payments.length === 0 ? (
+          <div className="billing-empty">
+            <Receipt size={32} style={{ opacity: 0.3 }} />
+            <p>Nenhum pagamento registrado ainda.</p>
+          </div>
+        ) : (
+          <div className="billing-payments-list">
+            {payments.map(pay => (
+              <div key={pay.id} className="billing-payment-row">
+                <div className="bpr-icon">
+                  <Banknote size={16} />
+                </div>
+                <div className="bpr-info">
+                  <div className="bpr-amount">{formatCurrency(pay.amount)}</div>
+                  <div className="bpr-meta">
+                    Pago em {formatDateTime(pay.paidAt)}
+                    {pay.dueDate && ` · Ref: ${formatDate(pay.dueDate)}`}
+                    {pay.notes && ` · ${pay.notes}`}
+                  </div>
+                </div>
+                <button className="bpr-delete" title="Remover" onClick={() => handleDeletePayment(pay.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="form-actions" style={{ marginTop: '1rem' }}>
+          <button className="btn btn-secondary" onClick={() => setIsBillingModalOpen(false)}>Fechar</button>
         </div>
       </Modal>
     </div>
