@@ -34,7 +34,7 @@ export default function Dashboard() {
   const fetchData = async () => {
     try {
       // 1. Fetch Predictions
-      const predRes = await fetch('http://localhost:3000/api/ai/stock-predictions', {
+      const predRes = await fetch('/api/ai/stock-predictions', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (predRes.ok) {
@@ -44,7 +44,7 @@ export default function Dashboard() {
 
       // 2. Fetch External Suggestions (Admin only)
       if (isAdmin) {
-        const suggRes = await fetch('http://localhost:3000/api/ai/suggestions', {
+        const suggRes = await fetch('/api/ai/suggestions', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (suggRes.ok) {
@@ -66,7 +66,7 @@ export default function Dashboard() {
   const dismissSuggestion = async (id: string) => {
     if (!confirm('Deseja remover esta sugestão da lista?')) return;
     try {
-      const res = await fetch(`http://localhost:3000/api/ai/suggestions/${id}`, {
+      const res = await fetch(`/api/ai/suggestions/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });

@@ -20,7 +20,7 @@ interface SalesState {
   closeSuccessPopup: () => void;
 }
 
-const API_URL = 'http://localhost:3000/api';
+const API_URL = '/api';
 
 const getHeaders = () => {
   const token = useAuthStore.getState().token;

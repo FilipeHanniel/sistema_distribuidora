@@ -12,7 +12,7 @@ interface UserState {
   changePassword: (data: { currentPassword: string; newPassword: any }) => Promise<{ success: boolean; message: string }>;
 }
 
-const API_URL = 'http://localhost:3000/api';
+const API_URL = '/api';
 
 const getHeaders = () => {
   const token = useAuthStore.getState().token;
