@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview --host 0.0.0.0 --port 5000",
+    "start": "node backend/server.js",
+    "start:prod": "NODE_ENV=production node backend/server.js",
+    "setup": "npm install && cd backend && npm install",
+    "deploy": "npm run build && NODE_ENV=production node backend/server.js"
   },
   "dependencies": {
     "lucide-react": "^1.7.0",

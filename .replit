@@ -54,7 +54,11 @@ externalPort = 80
 localPort = 5000
 externalPort = 5000
 
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bash", "-c", "node backend/server.js & npx vite preview --host 0.0.0.0 --port 5000"]
+run = ["node", "backend/server.js"]
 build = ["bash", "-c", "npm install && cd backend && npm install && cd .. && npm run build"]
