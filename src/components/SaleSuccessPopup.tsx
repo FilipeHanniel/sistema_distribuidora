@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
-import { CheckCircle2, Loader2, CreditCard, Banknote, QrCode, X, Printer } from 'lucide-react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
+import { CheckCircle2, Loader2, CreditCard, Banknote, QrCode, X } from 'lucide-react';
 import './SaleSuccessPopup.css';
 
 interface SaleSuccessPopupProps {
@@ -16,15 +16,21 @@ const METHOD_LABELS: Record<string, string> = {
   pix: 'PIX',
 };
 
-const METHOD_ICONS: Record<string, JSX.Element> = {
+const METHOD_ICONS: Record<string, ReactNode> = {
   money: <Banknote size={20} />,
   card: <CreditCard size={20} />,
   pix: <QrCode size={20} />,
 };
 
+type WindowWithWebkitAudio = Window & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
 function playSuccessSound() {
   try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudio).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const ctx = new AudioContextCtor();
     const notes = [523.25, 659.25, 783.99];
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
@@ -39,7 +45,7 @@ function playSuccessSound() {
       osc.start(ctx.currentTime + i * 0.12);
       osc.stop(ctx.currentTime + i * 0.12 + 0.25);
     });
-  } catch (e) {
+  } catch {
     // Browser may block audio without interaction
   }
 }

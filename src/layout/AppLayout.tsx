@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
@@ -93,7 +93,7 @@ export default function AppLayout() {
   if (!isAuthenticated()) return <Login />;
 
   // ---- Navegação por perfil ----
-  type NavItem = { to: string; icon: JSX.Element; label: string; end?: boolean };
+  type NavItem = { to: string; icon: ReactNode; label: string; end?: boolean };
 
   let navItems: NavItem[] = [];
   if (superAdmin) {

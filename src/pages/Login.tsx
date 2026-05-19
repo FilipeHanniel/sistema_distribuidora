@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { User, Lock, AlertCircle } from 'lucide-react';
+import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
 import './Login.css';
 
@@ -10,27 +11,20 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const loginStore = useAuthStore();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
 
     try {
-      const res = await fetch('/api/login', {
+      const data = await apiRequest<{ user: Parameters<typeof loginStore.login>[0]; token: string }>('/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        auth: false,
+        body: { username, password },
       });
-
-      const data = await res.json();
-
-      if (res.ok) {
-        loginStore.login(data.user, data.token);
-      } else {
-        setError(data.error || 'Falha ao autenticar.');
-      }
+      loginStore.login(data.user, data.token);
     } catch (err) {
-      setError('Servidor indisponível. Verifique sua conexão.');
+      setError(getApiErrorMessage(err, 'Servidor indisponível. Verifique sua conexão.'));
     } finally {
       setIsLoading(false);
     }

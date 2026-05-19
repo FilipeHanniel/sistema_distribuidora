@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { Plus, Search, UserPlus, User as UserIcon, Edit2, Trash2, Power, PowerOff, ShieldCheck } from 'lucide-react';
 import { useUserStore } from '../store/useUserStore';
-import { useAuthStore } from '../store/useAuthStore';
 import type { User } from '../types';
 import Modal from '../components/Modal';
 import './Users.css';
@@ -10,7 +9,6 @@ const MAX_OPERADORES = 5;
 
 export default function Users() {
   const { users, fetchUsers, createUser, updateUser, toggleUserStatus, deleteUser } = useUserStore();
-  const { user: authUser } = useAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -40,7 +38,7 @@ export default function Users() {
 
   const handleCloseModal = () => { setIsModalOpen(false); setEditingUser(null); };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     let success = false;
     if (editingUser) {

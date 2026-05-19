@@ -1,4 +1,3 @@
-import React from 'react';
 import { Pencil, Trash2, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
 import type { Product } from '../types';

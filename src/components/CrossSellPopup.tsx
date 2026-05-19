@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Lightbulb, X } from 'lucide-react';
 import './CrossSellPopup.css';
 
@@ -11,21 +11,18 @@ interface CrossSellPopupProps {
 export default function CrossSellPopup({ productName, suggestion, onClose }: CrossSellPopupProps) {
   const [isClosing, setIsClosing] = useState(false);
 
-  // Auto-dismiss after 8 seconds
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      handleClose();
-    }, 8000);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setIsClosing(true);
     setTimeout(() => {
       onClose();
     }, 300); // Match slideOutToLeft animation duration
-  };
+  }, [onClose]);
+
+  // Auto-dismiss after 8 seconds
+  useEffect(() => {
+    const timer = setTimeout(handleClose, 8000);
+    return () => clearTimeout(timer);
+  }, [handleClose]);
 
   return (
     <div className={`cross-sell-popup ${isClosing ? 'closing' : ''}`}>

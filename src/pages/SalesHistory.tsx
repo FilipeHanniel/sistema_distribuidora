@@ -1,11 +1,12 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Search, Receipt, Banknote, CreditCard, QrCode, CalendarRange, ChevronDown, ChevronUp, TrendingUp, Download, FileText, Printer } from 'lucide-react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
+import { Receipt, Banknote, CreditCard, QrCode, CalendarRange, ChevronDown, ChevronUp, TrendingUp, Download, Printer } from 'lucide-react';
+import { apiRequest } from '../lib/api';
 import { useSalesStore } from '../store/useSalesStore';
 import { useAuthStore } from '../store/useAuthStore';
 import type { Sale } from '../types';
 import './SalesHistory.css';
 
-const METHOD_ICONS: Record<string, JSX.Element> = {
+const METHOD_ICONS: Record<string, ReactNode> = {
   money: <Banknote size={16} />,
   card: <CreditCard size={16} />,
   pix: <QrCode size={16} />,
@@ -30,7 +31,7 @@ const formatDateShort = (iso: string) =>
 
 export default function SalesHistory() {
   const { sales, fetchSales } = useSalesStore();
-  const { user, isOperador } = useAuthStore();
+  const { isOperador } = useAuthStore();
   const [searchDate, setSearchDate] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [todaySales, setTodaySales] = useState<Sale[]>([]);
@@ -40,10 +41,7 @@ export default function SalesHistory() {
   // Operador: buscar apenas vendas do dia via endpoint dedicado
   useEffect(() => {
     if (operador) {
-      const token = useAuthStore.getState().token;
-      fetch('/api/sales/today', {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then(r => r.ok ? r.json() : []).then(setTodaySales);
+      apiRequest<Sale[]>('/sales/today').then(setTodaySales).catch(() => setTodaySales([]));
     } else {
       fetchSales();
     }
@@ -248,7 +246,7 @@ export default function SalesHistory() {
                       {METHOD_ICONS[sale.paymentMethod] ?? <Receipt size={16} />}
                     </div>
                     <div className="receipt-info">
-                      <span className="receipt-id">#{(sale as any).id?.slice(0, 8).toUpperCase()}</span>
+                      <span className="receipt-id">#{sale.id.slice(0, 8).toUpperCase()}</span>
                       <span className="receipt-time">{formatDate(sale.createdAt)}</span>
                     </div>
                   </div>

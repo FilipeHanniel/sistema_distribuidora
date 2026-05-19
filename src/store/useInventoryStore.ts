@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Product } from '../types';
-import { useAuthStore } from './useAuthStore';
+import { apiRequest, getApiErrorMessage } from '../lib/api';
 
 interface InventoryState {
   products: Product[];
@@ -11,27 +11,13 @@ interface InventoryState {
   updateStock: (id: string, quantityStep: number) => Promise<void>;
 }
 
-const API_URL = '/api';
-
-const getHeaders = () => {
-  const token = useAuthStore.getState().token;
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`
-  };
-};
-
 export const useInventoryStore = create<InventoryState>((set, get) => ({
   products: [],
   
   fetchProducts: async () => {
     try {
-      const res = await fetch(`${API_URL}/products`, {
-        headers: getHeaders()
-      });
-      if (res.status === 401) return useAuthStore.getState().logout();
-      const data = await res.json();
-      set({ products: data });
+      const products = await apiRequest<Product[]>('/products');
+      set({ products });
     } catch (err) {
       console.error('Falha ao buscar produtos:', err);
     }
@@ -39,67 +25,49 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   addProduct: async (productInfo) => {
     try {
-      const res = await fetch(`${API_URL}/products`, {
+      await apiRequest('/products', {
         method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify(productInfo)
+        body: productInfo
       });
-      if (res.ok) {
-        get().fetchProducts();
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Erro ao adicionar produto');
-      }
+      get().fetchProducts();
     } catch (err) {
       console.error('Falha ao salvar produto:', err);
+      alert(getApiErrorMessage(err, 'Erro ao adicionar produto'));
     }
   },
 
   updateProduct: async (id, updates) => {
     try {
-      const res = await fetch(`${API_URL}/products/${id}`, {
+      await apiRequest(`/products/${id}`, {
         method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify(updates)
+        body: updates
       });
-      if (res.ok) {
-        get().fetchProducts();
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Erro ao atualizar produto');
-      }
+      get().fetchProducts();
     } catch (err) {
       console.error('Falha ao atualizar produto:', err);
+      alert(getApiErrorMessage(err, 'Erro ao atualizar produto'));
     }
   },
 
   deleteProduct: async (id) => {
     try {
-      const res = await fetch(`${API_URL}/products/${id}`, { 
-        method: 'DELETE',
-        headers: getHeaders()
+      await apiRequest(`/products/${id}`, { 
+        method: 'DELETE'
       });
-      if (res.ok) {
-        get().fetchProducts();
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Erro ao deletar produto');
-      }
+      get().fetchProducts();
     } catch (err) {
       console.error('Falha ao deletar produto:', err);
+      alert(getApiErrorMessage(err, 'Erro ao deletar produto'));
     }
   },
 
   updateStock: async (id, quantityStep) => {
     try {
-      const res = await fetch(`${API_URL}/products/${id}/stock`, {
+      await apiRequest(`/products/${id}/stock`, {
         method: 'PATCH',
-        headers: getHeaders(),
-        body: JSON.stringify({ quantityStep })
+        body: { quantityStep }
       });
-      if (res.ok) {
-        get().fetchProducts();
-      }
+      get().fetchProducts();
     } catch (err) {
       console.error('Falha ao modificar estoque:', err);
     }

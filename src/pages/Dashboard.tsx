@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, ShoppingBag, Trash2, Sparkles, TrendingUp } from 'lucide-react';
+import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
 import './Dashboard.css';
 
@@ -27,52 +28,37 @@ export default function Dashboard() {
   const [predictions, setPredictions] = useState<StockPrediction[]>([]);
   const [externalSuggestions, setExternalSuggestions] = useState<ExternalSuggestion[]>([]);
   const [loading, setLoading] = useState(true);
-  const { token, user } = useAuthStore();
+  const { user } = useAuthStore();
 
-  const isAdmin = user?.role === 'admin';
+  const isGestor = user?.role === 'gestor';
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       // 1. Fetch Predictions
-      const predRes = await fetch('/api/ai/stock-predictions', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (predRes.ok) {
-        const data = await predRes.json();
-        setPredictions(data);
-      }
+      const predictions = await apiRequest<StockPrediction[]>('/ai/stock-predictions');
+      setPredictions(predictions);
 
       // 2. Fetch External Suggestions (Admin only)
-      if (isAdmin) {
-        const suggRes = await fetch('/api/ai/suggestions', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (suggRes.ok) {
-          const data = await suggRes.json();
-          setExternalSuggestions(data);
-        }
+      if (isGestor) {
+        const suggestions = await apiRequest<ExternalSuggestion[]>('/ai/suggestions');
+        setExternalSuggestions(suggestions);
       }
     } catch (err) {
       console.error('Erro ao buscar dados do Dashboard:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [isGestor]);
 
   useEffect(() => {
     fetchData();
-  }, [token, isAdmin]);
+  }, [fetchData]);
 
   const dismissSuggestion = async (id: string) => {
     if (!confirm('Deseja remover esta sugestão da lista?')) return;
     try {
-      const res = await fetch(`/api/ai/suggestions/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setExternalSuggestions(prev => prev.filter(s => s.id !== id));
-      }
+      await apiRequest(`/ai/suggestions/${id}`, { method: 'DELETE' });
+      setExternalSuggestions(prev => prev.filter(s => s.id !== id));
     } catch (err) {
       console.error('Erro ao excluir sugestão:', err);
     }
@@ -206,7 +192,7 @@ export default function Dashboard() {
         </section>
 
         {/* --- SEÇÃO 2: OPORTUNIDADES DE COMPRA (Sugestões Externas) --- */}
-        {isAdmin && (
+        {isGestor && (
           <section className="suggestions-section">
             <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#8b5cf6' }}>
               <TrendingUp size={20} /> Oportunidades de Compra (Demanda IA)

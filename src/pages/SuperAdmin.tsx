@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import {
-  Building2, Users, TrendingUp, ShieldCheck, ShieldX,
+  Building2, TrendingUp, ShieldCheck, ShieldX,
   Plus, Edit2, Trash2, RefreshCw, Mail, Phone, Calendar,
   Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
-  CreditCard, Receipt, ChevronRight, Banknote, X
+  CreditCard, Receipt, Banknote, X
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import type { Establishment } from '../types';
@@ -49,17 +49,41 @@ interface Payment {
   dueDate?: string; paidAt?: string; notes?: string; createdAt: string;
 }
 
-type Tab = 'establishments' | 'billing';
+interface ManagedEstablishment extends Establishment {
+  monthlyAmount?: number;
+  userCount?: number;
+  salesCount?: number;
+  lastPayment?: Pick<Payment, 'paidAt' | 'amount'>;
+}
 
-const emptyForm = {
-  name: '', ownerName: '', email: '', phone: '', plan: 'basic' as const,
-  monthlyAmount: '', subscriptionStatus: 'active' as const, subscriptionDueDate: '', notes: '',
+type Tab = 'establishments' | 'billing';
+type Plan = Establishment['plan'];
+type SubscriptionStatus = Establishment['subscriptionStatus'];
+
+interface EstablishmentForm {
+  name: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  plan: Plan;
+  monthlyAmount: string;
+  subscriptionStatus: SubscriptionStatus;
+  subscriptionDueDate: string;
+  notes: string;
+  gestorUsername: string;
+  gestorPassword: string;
+  gestorName: string;
+}
+
+const emptyForm: EstablishmentForm = {
+  name: '', ownerName: '', email: '', phone: '', plan: 'basic',
+  monthlyAmount: '', subscriptionStatus: 'active', subscriptionDueDate: '', notes: '',
   gestorUsername: '', gestorPassword: '', gestorName: '',
 };
 
 export default function SuperAdmin() {
   const [tab, setTab] = useState<Tab>('establishments');
-  const [establishments, setEstablishments] = useState<Establishment[]>([]);
+  const [establishments, setEstablishments] = useState<ManagedEstablishment[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -70,14 +94,17 @@ export default function SuperAdmin() {
   const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
   const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
 
-  const [selectedEst, setSelectedEst] = useState<Establishment | null>(null);
+  const [selectedEst, setSelectedEst] = useState<ManagedEstablishment | null>(null);
   const [estUsers, setEstUsers] = useState<EstUser[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [paymentLoading, setPaymentLoading] = useState(false);
 
   // Forms
   const [formData, setFormData] = useState({ ...emptyForm });
-  const [subData, setSubData] = useState({ subscriptionStatus: 'active', subscriptionDueDate: '' });
+  const [subData, setSubData] = useState<{ subscriptionStatus: SubscriptionStatus; subscriptionDueDate: string }>({
+    subscriptionStatus: 'active',
+    subscriptionDueDate: '',
+  });
   const [payForm, setPayForm] = useState({ amount: '', notes: '' });
   const [payFormOpen, setPayFormOpen] = useState(false);
 
@@ -105,12 +132,12 @@ export default function SuperAdmin() {
     setIsFormOpen(true);
   };
 
-  const openEdit = (est: Establishment) => {
+  const openEdit = (est: ManagedEstablishment) => {
     setEditingEst(est);
     setFormData({
       name: est.name, ownerName: est.ownerName || '', email: est.email || '',
       phone: est.phone || '', plan: est.plan,
-      monthlyAmount: (est as any).monthlyAmount ? String((est as any).monthlyAmount) : '',
+      monthlyAmount: est.monthlyAmount ? String(est.monthlyAmount) : '',
       subscriptionStatus: est.subscriptionStatus,
       subscriptionDueDate: est.subscriptionDueDate ? est.subscriptionDueDate.split('T')[0] : '',
       notes: est.notes || '', gestorUsername: '', gestorPassword: '', gestorName: '',
@@ -118,7 +145,7 @@ export default function SuperAdmin() {
     setIsFormOpen(true);
   };
 
-  const openSubModal = (est: Establishment) => {
+  const openSubModal = (est: ManagedEstablishment) => {
     setSelectedEst(est);
     setSubData({
       subscriptionStatus: est.subscriptionStatus,
@@ -127,16 +154,16 @@ export default function SuperAdmin() {
     setIsSubModalOpen(true);
   };
 
-  const openUsersModal = async (est: Establishment) => {
+  const openUsersModal = async (est: ManagedEstablishment) => {
     setSelectedEst(est);
     setIsUsersModalOpen(true);
     const res = await fetch(`${API}/admin/establishments/${est.id}/users`, { headers: getHeaders() });
     if (res.ok) setEstUsers(await res.json());
   };
 
-  const openBilling = async (est: Establishment) => {
+  const openBilling = async (est: ManagedEstablishment) => {
     setSelectedEst(est);
-    setPayForm({ amount: (est as any).monthlyAmount ? String((est as any).monthlyAmount) : '', notes: '' });
+    setPayForm({ amount: est.monthlyAmount ? String(est.monthlyAmount) : '', notes: '' });
     setPayFormOpen(false);
     setIsBillingModalOpen(true);
     setPaymentLoading(true);
@@ -145,7 +172,7 @@ export default function SuperAdmin() {
     setPaymentLoading(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const dueDateISO = formData.subscriptionDueDate ? new Date(formData.subscriptionDueDate).toISOString() : undefined;
     const endpoint = editingEst
@@ -170,13 +197,13 @@ export default function SuperAdmin() {
     if (res.ok) { setIsSubModalOpen(false); loadData(); }
   };
 
-  const handleDelete = async (est: Establishment) => {
+  const handleDelete = async (est: ManagedEstablishment) => {
     if (!confirm(`Excluir "${est.name}"? Todos os usuários serão desativados.`)) return;
     const res = await fetch(`${API}/admin/establishments/${est.id}`, { method: 'DELETE', headers: getHeaders() });
     if (res.ok) loadData();
   };
 
-  const handleRegisterPayment = async (e: React.FormEvent) => {
+  const handleRegisterPayment = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedEst) return;
     const res = await fetch(`${API}/admin/establishments/${selectedEst.id}/payments`, {
@@ -206,7 +233,7 @@ export default function SuperAdmin() {
   };
 
   // ---- UI helpers ----
-  const renderDueBadge = (est: Establishment) => {
+  const renderDueBadge = (est: ManagedEstablishment) => {
     const days = getDueDays(est.subscriptionDueDate);
     if (days === null) return null;
     let cls = ''; let msg = '';
@@ -278,7 +305,7 @@ export default function SuperAdmin() {
           <div className="est-grid">
             {establishments.map(est => {
               const days = getDueDays(est.subscriptionDueDate);
-              const lastPay = (est as any).lastPayment;
+              const lastPay = est.lastPayment;
               return (
                 <div key={est.id} className={`est-card ${est.subscriptionStatus === 'suspended' ? 'est-card--suspended' : ''}`}>
                   <div className="est-card-top">
@@ -297,16 +324,16 @@ export default function SuperAdmin() {
                   <div className="est-meta">
                     <div className="est-meta-item">
                       <span className="est-meta-label">Usuários</span>
-                      <span className="est-meta-value">{(est as any).userCount ?? 0}</span>
+                      <span className="est-meta-value">{est.userCount ?? 0}</span>
                     </div>
                     <div className="est-meta-item">
                       <span className="est-meta-label">Vendas</span>
-                      <span className="est-meta-value">{(est as any).salesCount ?? 0}</span>
+                      <span className="est-meta-value">{est.salesCount ?? 0}</span>
                     </div>
                     <div className="est-meta-item">
                       <span className="est-meta-label">Mensal</span>
                       <span className="est-meta-value" style={{ fontSize: '0.8rem' }}>
-                        {(est as any).monthlyAmount ? formatCurrency((est as any).monthlyAmount) : '—'}
+                        {est.monthlyAmount ? formatCurrency(est.monthlyAmount) : '—'}
                       </span>
                     </div>
                   </div>
@@ -357,7 +384,7 @@ export default function SuperAdmin() {
               <tbody>
                 {establishments.map(est => {
                   const days = getDueDays(est.subscriptionDueDate);
-                  const lastPay = (est as any).lastPayment;
+                  const lastPay = est.lastPayment;
                   return (
                     <tr key={est.id} className={est.subscriptionStatus === 'suspended' ? 'row-suspended' : days !== null && days < 0 ? 'row-overdue' : ''}>
                       <td>
@@ -365,7 +392,7 @@ export default function SuperAdmin() {
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{est.ownerName}</div>
                       </td>
                       <td><span className={`badge badge-plan-${est.plan}`}>{PLAN_LABELS[est.plan]}</span></td>
-                      <td>{(est as any).monthlyAmount ? formatCurrency((est as any).monthlyAmount) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</td>
+                      <td>{est.monthlyAmount ? formatCurrency(est.monthlyAmount) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</td>
                       <td><span className={`badge badge-sub-${est.subscriptionStatus}`}>{STATUS_LABELS[est.subscriptionStatus]}</span></td>
                       <td>
                         <div style={{ fontWeight: days !== null && days < 0 ? 700 : 400, color: days !== null && days < 0 ? '#dc2626' : undefined }}>
@@ -418,7 +445,7 @@ export default function SuperAdmin() {
             <div className="form-group">
               <label>Plano</label>
               <select className="form-control" value={formData.plan}
-                onChange={e => setFormData(p => ({ ...p, plan: e.target.value as any }))}>
+                onChange={e => setFormData(p => ({ ...p, plan: e.target.value as Plan }))}>
                 <option value="basic">Básico</option>
                 <option value="premium">Premium</option>
                 <option value="enterprise">Enterprise</option>
@@ -449,7 +476,7 @@ export default function SuperAdmin() {
             <div className="form-group">
               <label>Status da Assinatura</label>
               <select className="form-control" value={formData.subscriptionStatus}
-                onChange={e => setFormData(p => ({ ...p, subscriptionStatus: e.target.value as any }))}>
+                onChange={e => setFormData(p => ({ ...p, subscriptionStatus: e.target.value as SubscriptionStatus }))}>
                 <option value="active">Ativo</option>
                 <option value="overdue">Em Atraso</option>
                 <option value="suspended">Suspenso</option>
@@ -512,7 +539,7 @@ export default function SuperAdmin() {
         <div className="form-group">
           <label>Status da Assinatura</label>
           <select className="form-control" value={subData.subscriptionStatus}
-            onChange={e => setSubData(p => ({ ...p, subscriptionStatus: e.target.value }))}>
+            onChange={e => setSubData(p => ({ ...p, subscriptionStatus: e.target.value as SubscriptionStatus }))}>
             <option value="active">Ativo</option>
             <option value="overdue">Em Atraso</option>
             <option value="suspended">Suspenso (bloqueia acesso)</option>
@@ -563,12 +590,12 @@ export default function SuperAdmin() {
           <div className="billing-summary">
             <div className="billing-summary-item">
               <span className="bs-label">Plano</span>
-              <span className="bs-value">{PLAN_LABELS[(selectedEst as any).plan] || selectedEst.plan}</span>
+              <span className="bs-value">{PLAN_LABELS[selectedEst.plan] || selectedEst.plan}</span>
             </div>
             <div className="billing-summary-item">
               <span className="bs-label">Mensalidade</span>
               <span className="bs-value highlight">
-                {(selectedEst as any).monthlyAmount ? formatCurrency((selectedEst as any).monthlyAmount) : 'Não definida'}
+                {selectedEst.monthlyAmount ? formatCurrency(selectedEst.monthlyAmount) : 'Não definida'}
               </span>
             </div>
             <div className="billing-summary-item">

@@ -104,7 +104,7 @@ export default function Analytics() {
       return (
         <div className="custom-tooltip">
           <p className="label">{label}</p>
-          <p className="value">{payload[0].value} un. — {formatCurrency(payload[1]?.value ?? 0)}</p>
+          <p className="value">{payload[0].value} un. - {formatCurrency(payload[1]?.value ?? 0)}</p>
         </div>
       );
     }

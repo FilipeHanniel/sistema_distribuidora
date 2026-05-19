@@ -57,8 +57,6 @@ export default function Sales() {
     if (crossSellTimer.current) clearTimeout(crossSellTimer.current);
     if (cart.length > 0) {
       crossSellTimer.current = setTimeout(() => fetchCrossSell(cart), 2000);
-    } else {
-      setCrossSell(null);
     }
     return () => { if (crossSellTimer.current) clearTimeout(crossSellTimer.current); };
   }, [cart, fetchCrossSell]);
@@ -340,7 +338,7 @@ export default function Sales() {
         </div>
       </div>
 
-      {crossSell && (
+      {cart.length > 0 && crossSell && (
         <CrossSellPopup
           productName={crossSell.productName}
           suggestion={crossSell.suggestion}

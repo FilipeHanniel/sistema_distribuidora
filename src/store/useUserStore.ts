@@ -1,40 +1,31 @@
 import { create } from 'zustand';
 import type { User } from '../types';
-import { useAuthStore } from './useAuthStore';
+import { apiRequest, getApiErrorMessage } from '../lib/api';
+
+type UserPayload = {
+  username: string;
+  password?: string;
+  name: string;
+  role?: User['role'];
+};
 
 interface UserState {
   users: User[];
   fetchUsers: () => Promise<void>;
-  createUser: (userInfo: any) => Promise<boolean>;
-  updateUser: (id: string, updates: any) => Promise<boolean>;
+  createUser: (userInfo: UserPayload) => Promise<boolean>;
+  updateUser: (id: string, updates: UserPayload) => Promise<boolean>;
   toggleUserStatus: (id: string, active: boolean) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
-  changePassword: (data: { currentPassword: string; newPassword: any }) => Promise<{ success: boolean; message: string }>;
+  changePassword: (data: { currentPassword: string; newPassword: string }) => Promise<{ success: boolean; message: string }>;
 }
-
-const API_URL = '/api';
-
-const getHeaders = () => {
-  const token = useAuthStore.getState().token;
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`
-  };
-};
 
 export const useUserStore = create<UserState>((set, get) => ({
   users: [],
 
   fetchUsers: async () => {
     try {
-      const res = await fetch(`${API_URL}/users`, {
-        headers: getHeaders()
-      });
-      if (res.status === 401) return useAuthStore.getState().logout();
-      if (res.ok) {
-        const data = await res.json();
-        set({ users: data });
-      }
+      const users = await apiRequest<User[]>('/users');
+      set({ users });
     } catch (err) {
       console.error('Falha ao buscar usuários:', err);
     }
@@ -42,56 +33,41 @@ export const useUserStore = create<UserState>((set, get) => ({
 
   createUser: async (userInfo) => {
     try {
-      const res = await fetch(`${API_URL}/register`, {
+      await apiRequest('/register', {
         method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify(userInfo)
+        body: userInfo,
       });
-      if (res.ok) {
-        get().fetchUsers();
-        return true;
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Erro ao criar usuário');
-        return false;
-      }
+      get().fetchUsers();
+      return true;
     } catch (err) {
       console.error('Falha ao salvar usuário:', err);
+      alert(getApiErrorMessage(err, 'Erro ao criar usuário'));
       return false;
     }
   },
 
   updateUser: async (id, updates) => {
     try {
-      const res = await fetch(`${API_URL}/users/${id}`, {
+      await apiRequest(`/users/${id}`, {
         method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify(updates)
+        body: updates,
       });
-      if (res.ok) {
-        get().fetchUsers();
-        return true;
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Erro ao atualizar usuário');
-        return false;
-      }
+      get().fetchUsers();
+      return true;
     } catch (err) {
       console.error('Falha ao atualizar usuário:', err);
+      alert(getApiErrorMessage(err, 'Erro ao atualizar usuário'));
       return false;
     }
   },
 
   toggleUserStatus: async (id, active) => {
     try {
-      const res = await fetch(`${API_URL}/users/${id}/status`, {
+      await apiRequest(`/users/${id}/status`, {
         method: 'PATCH',
-        headers: getHeaders(),
-        body: JSON.stringify({ active })
+        body: { active },
       });
-      if (res.ok) {
-        get().fetchUsers();
-      }
+      get().fetchUsers();
     } catch (err) {
       console.error('Falha ao alterar status:', err);
     }
@@ -100,13 +76,8 @@ export const useUserStore = create<UserState>((set, get) => ({
   deleteUser: async (id) => {
     if (!confirm('Tem certeza que deseja excluir permanentemente este usuário?')) return;
     try {
-      const res = await fetch(`${API_URL}/users/${id}/delete`, {
-        method: 'PATCH',
-        headers: getHeaders()
-      });
-      if (res.ok) {
-        get().fetchUsers();
-      }
+      await apiRequest(`/users/${id}/delete`, { method: 'PATCH' });
+      get().fetchUsers();
     } catch (err) {
       console.error('Falha ao excluir usuário:', err);
     }
@@ -114,15 +85,13 @@ export const useUserStore = create<UserState>((set, get) => ({
 
   changePassword: async (data) => {
     try {
-      const res = await fetch(`${API_URL}/users/me/password`, {
+      const result = await apiRequest<{ message?: string; error?: string }>('/users/me/password', {
         method: 'PATCH',
-        headers: getHeaders(),
-        body: JSON.stringify(data)
+        body: data,
       });
-      const result = await res.json();
-      return { success: res.ok, message: result.message || result.error };
+      return { success: true, message: result.message || 'Senha alterada com sucesso!' };
     } catch (err) {
-      return { success: false, message: 'Erro de conexão com o servidor.' };
+      return { success: false, message: getApiErrorMessage(err, 'Erro de conexão com o servidor.') };
     }
-  }
+  },
 }));
