@@ -1,118 +1,129 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, UserPlus, Shield, User as UserIcon, MoreVertical, Edit2, Trash2, Power, PowerOff, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Plus, Search, UserPlus, User as UserIcon, Edit2, Trash2, Power, PowerOff, ShieldCheck } from 'lucide-react';
 import { useUserStore } from '../store/useUserStore';
+import { useAuthStore } from '../store/useAuthStore';
 import type { User } from '../types';
 import Modal from '../components/Modal';
 import './Users.css';
 
+const MAX_OPERADORES = 5;
+
 export default function Users() {
   const { users, fetchUsers, createUser, updateUser, toggleUserStatus, deleteUser } = useUserStore();
+  const { user: authUser } = useAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  
-  // Form state
+
   const [formData, setFormData] = useState({
     username: '',
     password: '',
     name: '',
-    role: 'staff' as 'admin' | 'staff'
   });
 
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  const operadores = users.filter(u => u.role === 'operador');
+  const countAtivos = operadores.filter(u => u.active === 1).length;
+  const atLimit = operadores.length >= MAX_OPERADORES;
 
   const handleOpenModal = (user?: User) => {
     if (user) {
       setEditingUser(user);
-      setFormData({
-        username: user.username,
-        password: '', // Password is optional on edit
-        name: user.name,
-        role: user.role
-      });
+      setFormData({ username: user.username, password: '', name: user.name });
     } else {
       setEditingUser(null);
-      setFormData({
-        username: '',
-        password: '',
-        name: '',
-        role: 'staff'
-      });
+      setFormData({ username: '', password: '', name: '' });
     }
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setEditingUser(null);
-  };
+  const handleCloseModal = () => { setIsModalOpen(false); setEditingUser(null); };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let success = false;
-    
     if (editingUser) {
-      // If editing, password can be empty to keep current
       success = await updateUser(editingUser.id, formData);
     } else {
-      // If creating, password is required
-      if (!formData.password) {
-        alert('A senha é obrigatória para novos usuários.');
-        return;
-      }
-      success = await createUser(formData);
+      if (!formData.password) { alert('A senha é obrigatória para novos funcionários.'); return; }
+      success = await createUser({ ...formData, role: 'operador' });
     }
-
-    if (success) {
-      handleCloseModal();
-    }
+    if (success) handleCloseModal();
   };
 
-  const filteredUsers = users.filter(u => 
-    u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+  const filteredUsers = operadores.filter(u =>
+    u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     u.username.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
-  const widgets = [
-    { title: 'Total de Usuários', value: users.length, icon: <UserIcon size={20} /> },
-    { title: 'Administradores', value: users.filter(u => u.role === 'admin').length, icon: <Shield size={20} /> },
-    { title: 'Operadores ativos', value: users.filter(u => u.role === 'staff' && u.active === 1).length, icon: <UserPlus size={20} /> },
-  ];
 
   return (
     <div className="page-container users-page">
       <div className="page-header">
         <div className="header-info">
-          <h1>Gestão de Acessos</h1>
-          <p className="subtitle">Controle quem pode acessar o sistema e suas permissões</p>
+          <h1>Funcionários</h1>
+          <p className="subtitle">Cadastre e gerencie operadores do ponto de venda — máximo de {MAX_OPERADORES} funcionários</p>
         </div>
-        <button className="btn btn-primary" onClick={() => handleOpenModal()}>
-          <Plus size={18} /> Novo Usuário
+        <button
+          className="btn btn-primary"
+          onClick={() => handleOpenModal()}
+          disabled={atLimit}
+          title={atLimit ? `Limite de ${MAX_OPERADORES} funcionários atingido` : 'Novo funcionário'}
+        >
+          <Plus size={18} /> Novo Funcionário
         </button>
       </div>
 
+      {/* Contadores */}
       <div className="widgets-grid">
-        {widgets.map((w, idx) => (
-          <div key={idx} className="widget-card">
-            <div className="widget-icon">{w.icon}</div>
-            <div className="widget-content">
-              <span className="widget-title">{w.title}</span>
-              <span className="widget-value">{w.value}</span>
-            </div>
+        <div className="widget-card">
+          <div className="widget-icon"><UserPlus size={20} /></div>
+          <div className="widget-content">
+            <span className="widget-title">Funcionários Cadastrados</span>
+            <span className="widget-value">
+              {operadores.length} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>/ {MAX_OPERADORES}</span>
+            </span>
           </div>
-        ))}
+        </div>
+        <div className="widget-card">
+          <div className="widget-icon"><UserIcon size={20} /></div>
+          <div className="widget-content">
+            <span className="widget-title">Operadores Ativos</span>
+            <span className="widget-value">{countAtivos}</span>
+          </div>
+        </div>
+        <div className="widget-card" style={{ borderColor: atLimit ? 'var(--danger, #dc2626)' : undefined }}>
+          <div className="widget-icon" style={{ background: atLimit ? '#fee2e2' : undefined, color: atLimit ? '#dc2626' : undefined }}>
+            <ShieldCheck size={20} />
+          </div>
+          <div className="widget-content">
+            <span className="widget-title">Vagas Disponíveis</span>
+            <span className="widget-value" style={{ color: atLimit ? '#dc2626' : undefined }}>
+              {Math.max(0, MAX_OPERADORES - operadores.length)}
+            </span>
+          </div>
+        </div>
       </div>
+
+      {atLimit && (
+        <div style={{
+          background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: '1rem',
+          padding: '0.875rem 1.25rem', marginBottom: '1.5rem', fontSize: '0.875rem',
+          color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem',
+        }}>
+          <UserPlus size={16} />
+          Você atingiu o limite de {MAX_OPERADORES} funcionários. Exclua um para cadastrar outro.
+        </div>
+      )}
 
       <div className="search-bar">
         <div className="search-input-wrapper">
           <Search size={18} className="search-icon" />
-          <input 
-            type="text" 
-            placeholder="Buscar por nome ou login..." 
+          <input
+            type="text"
+            placeholder="Buscar por nome ou login..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
       </div>
@@ -121,120 +132,88 @@ export default function Users() {
         <table className="users-table">
           <thead>
             <tr>
-              <th>Usuário</th>
+              <th>Funcionário</th>
               <th>Login</th>
-              <th>Permissão</th>
               <th>Status</th>
               <th className="text-right">Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredUsers.length > 0 ? (
-              filteredUsers.map(user => (
-                <tr key={user.id} className={user.active === 0 ? 'user-inactive' : ''}>
-                  <td>
-                    <div className="user-info-cell">
-                      <div className="user-avatar">{user.name[0].toUpperCase()}</div>
-                      <span>{user.name}</span>
-                    </div>
-                  </td>
-                  <td><code>{user.username}</code></td>
-                  <td>
-                    <span className={`role-badge ${user.role}`}>
-                      {user.role === 'admin' ? <ShieldCheck size={14} /> : <UserIcon size={14} />}
-                      {user.role === 'admin' ? 'Administrador' : 'Operador'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`status-badge ${user.active === 1 ? 'active' : 'inactive'}`}>
-                      {user.active === 1 ? 'Ativo' : 'Desativado'}
-                    </span>
-                  </td>
-                  <td className="text-right actions-cell">
-                    <button 
-                      className="action-btn status" 
-                      title={user.active === 1 ? 'Desativar' : 'Ativar'}
-                      onClick={() => toggleUserStatus(user.id, user.active === 0)}
-                    >
-                      {user.active === 1 ? <PowerOff size={18} /> : <Power size={18} />}
-                    </button>
-                    <button className="action-btn edit" title="Editar" onClick={() => handleOpenModal(user)}>
-                      <Edit2 size={18} />
-                    </button>
-                    <button className="action-btn delete" title="Excluir" onClick={() => deleteUser(user.id)}>
-                      <Trash2 size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))
-            ) : (
+            {filteredUsers.length > 0 ? filteredUsers.map(user => (
+              <tr key={user.id} className={user.active === 0 ? 'user-inactive' : ''}>
+                <td>
+                  <div className="user-info-cell">
+                    <div className="user-avatar">{user.name[0].toUpperCase()}</div>
+                    <span>{user.name}</span>
+                  </div>
+                </td>
+                <td><code>{user.username}</code></td>
+                <td>
+                  <span className={`status-badge ${user.active === 1 ? 'active' : 'inactive'}`}>
+                    {user.active === 1 ? 'Ativo' : 'Desativado'}
+                  </span>
+                </td>
+                <td className="text-right actions-cell">
+                  <button
+                    className="action-btn status"
+                    title={user.active === 1 ? 'Desativar' : 'Ativar'}
+                    onClick={() => toggleUserStatus(user.id, user.active === 0)}
+                  >
+                    {user.active === 1 ? <PowerOff size={18} /> : <Power size={18} />}
+                  </button>
+                  <button className="action-btn edit" title="Editar" onClick={() => handleOpenModal(user)}>
+                    <Edit2 size={18} />
+                  </button>
+                  <button className="action-btn delete" title="Excluir" onClick={() => deleteUser(user.id)}>
+                    <Trash2 size={18} />
+                  </button>
+                </td>
+              </tr>
+            )) : (
               <tr>
-                <td colSpan={5} className="empty-state">Nenhum usuário encontrado.</td>
+                <td colSpan={4} className="empty-state">
+                  {operadores.length === 0 ? 'Nenhum funcionário cadastrado ainda.' : 'Nenhum resultado encontrado.'}
+                </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={handleCloseModal} 
-        title={editingUser ? 'Editar Usuário' : 'Novo Usuário'}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        title={editingUser ? 'Editar Funcionário' : 'Novo Funcionário (Operador)'}
       >
         <form onSubmit={handleSubmit} className="user-form">
           <div className="form-group">
             <label>Nome Completo</label>
-            <input 
-              type="text" 
-              className="form-control"
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              required
-              placeholder="Ex: João Silva"
-            />
+            <input type="text" className="form-control" value={formData.name}
+              onChange={e => setFormData({ ...formData, name: e.target.value })}
+              required placeholder="Ex: João Silva" />
           </div>
-
           <div className="form-row">
             <div className="form-group">
-              <label>Nome de Usuário (Login)</label>
-              <input 
-                type="text" 
-                className="form-control"
-                value={formData.username}
-                onChange={e => setFormData({...formData, username: e.target.value})}
-                required
-                placeholder="Ex: joao.silva"
-              />
+              <label>Login de Acesso</label>
+              <input type="text" className="form-control" value={formData.username}
+                onChange={e => setFormData({ ...formData, username: e.target.value })}
+                required placeholder="Ex: joao.silva" />
             </div>
-            
             <div className="form-group">
-              <label>Permissão</label>
-              <select 
-                className="form-control"
-                value={formData.role}
-                onChange={e => setFormData({...formData, role: e.target.value as any})}
-              >
-                <option value="staff">Operador (Limite de acesso)</option>
-                <option value="admin">Administrador (Acesso total)</option>
-              </select>
+              <label>{editingUser ? 'Nova Senha (opcional)' : 'Senha de Acesso'}</label>
+              <input type="password" className="form-control" value={formData.password}
+                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                required={!editingUser} placeholder={editingUser ? '••••••••' : 'Senha'} />
             </div>
           </div>
-
-          <div className="form-group">
-            <label>{editingUser ? 'Senha (deixe em branco para não alterar)' : 'Senha de Acesso'}</label>
-            <input 
-              type="password" 
-              className="form-control"
-              value={formData.password}
-              onChange={e => setFormData({...formData, password: e.target.value})}
-              required={!editingUser}
-              placeholder={editingUser ? '••••••••' : 'Digite a senha'}
-            />
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-main)', padding: '0.75rem', borderRadius: '0.5rem' }}>
+            Este funcionário terá acesso ao <strong>Ponto de Venda</strong> e <strong>Comprovantes do dia</strong>.
           </div>
-
           <div className="form-actions">
             <button type="button" className="btn btn-secondary" onClick={handleCloseModal}>Cancelar</button>
-            <button type="submit" className="btn btn-primary">{editingUser ? 'Salvar Alterações' : 'Criar Operador'}</button>
+            <button type="submit" className="btn btn-primary">
+              {editingUser ? 'Salvar Alterações' : 'Cadastrar Funcionário'}
+            </button>
           </div>
         </form>
       </Modal>

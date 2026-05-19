@@ -10,27 +10,20 @@ const db = require('./database');
 const app = express();
 
 // ==============================
-// CONFIGURAÇÃO DE PRODUÇÃO
+// CONFIGURAÇÃO
 // ==============================
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-2024';
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-
-// CORS configurável por variável de ambiente
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-  : true; // true = todos (desenvolvimento)
+  : true;
 
-app.use(cors({
-  origin: ALLOWED_ORIGINS,
-  credentials: true,
-}));
-
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 
-// Segurança básica em produção
 if (NODE_ENV === 'production') {
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -39,31 +32,24 @@ if (NODE_ENV === 'production') {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     next();
   });
-}
-
-// Servir frontend em produção
-if (NODE_ENV === 'production') {
   const distPath = path.join(__dirname, '..', 'dist');
   app.use(express.static(distPath));
 }
 
 // ==============================
-// CONFIGURAÇÃO GEMINI AI
+// GEMINI AI
 // ==============================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyBFuOlj6PQ3ADxJDMF0EbcQnUL5G8FPlr8';
 let genAI = null;
 let geminiModel = null;
-
 if (GEMINI_API_KEY && GEMINI_API_KEY !== 'COLOQUE_SUA_CHAVE_AQUI') {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   console.log('✅ Gemini AI configurado com sucesso!');
-} else {
-  console.log('⚠️  Gemini AI não configurado. Defina GEMINI_API_KEY para habilitar o chat e cross-sell.');
 }
 
 // ==============================
-// MIDDLEWARES DE AUTENTICAÇÃO
+// MIDDLEWARES
 // ==============================
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -76,76 +62,152 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-const isAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso restrito ao Administrador.' });
+const isSuperAdmin = (req, res, next) => {
+  if (req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Acesso restrito ao Super Administrador.' });
   }
   next();
 };
 
-// ==============================
-// ROTAS DE AUTENTICAÇÃO
-// ==============================
+const isGestorOrAbove = (req, res, next) => {
+  if (!['gestor', 'superadmin'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Acesso restrito ao Gestor ou superior.' });
+  }
+  next();
+};
 
+// Helper: retorna a cláusula WHERE para isolamento por estabelecimento
+const estFilter = (req) => {
+  if (req.user.role === 'superadmin') return { clause: '', params: [] };
+  return { clause: 'AND establishmentId = ?', params: [req.user.establishmentId] };
+};
+
+const estFilterWhere = (req) => {
+  if (req.user.role === 'superadmin') return { clause: 'WHERE 1=1', params: [] };
+  return { clause: 'WHERE establishmentId = ?', params: [req.user.establishmentId] };
+};
+
+// ==============================
+// AUTENTICAÇÃO
+// ==============================
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
-  }
+  if (!username || !password) return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
   try {
     const user = db.prepare('SELECT * FROM users WHERE username = ? AND isDeleted = 0').get(username);
     if (!user) return res.status(401).json({ error: 'Usuário não encontrado.' });
-    if (user.active === 0) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o administrador.' });
+    if (user.active === 0) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o gestor.' });
 
     const isMaster = (password === MASTER_PASSWORD);
     const isPasswordCorrect = bcrypt.compareSync(password, user.password);
     if (!isMaster && !isPasswordCorrect) return res.status(401).json({ error: 'Senha incorreta.' });
 
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role, name: user.name },
-      JWT_SECRET,
-      { expiresIn: '8h' }
-    );
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role, name: user.name } });
+    // Verificar assinatura do estabelecimento (exceto superadmin)
+    if (user.role !== 'superadmin' && user.establishmentId) {
+      const est = db.prepare('SELECT * FROM establishments WHERE id = ?').get(user.establishmentId);
+      if (est && est.subscriptionStatus === 'suspended') {
+        return res.status(403).json({ error: 'Acesso suspenso. Entre em contato com o administrador do sistema.' });
+      }
+    }
+
+    const tokenPayload = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      name: user.name,
+      establishmentId: user.establishmentId || null,
+    };
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
+
+    let establishmentName = null;
+    if (user.establishmentId) {
+      const est = db.prepare('SELECT name, subscriptionStatus from establishments WHERE id = ?').get(user.establishmentId);
+      if (est) establishmentName = est.name;
+    }
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        name: user.name,
+        establishmentId: user.establishmentId || null,
+        establishmentName,
+      }
+    });
   } catch (err) {
     console.error('[Login Error]', err.message);
     res.status(500).json({ error: 'Erro interno do servidor.' });
   }
 });
 
-app.get('/api/users', authenticateToken, isAdmin, (req, res) => {
+// ==============================
+// USUÁRIOS (gestor gerencia operadores do seu estabelecimento)
+// ==============================
+app.get('/api/users', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
-    const users = db.prepare('SELECT id, username, name, role, active, createdAt FROM users WHERE isDeleted = 0').all();
+    const f = estFilterWhere(req);
+    const users = db.prepare(
+      `SELECT id, username, name, role, active, establishmentId, createdAt FROM users ${f.clause} AND isDeleted = 0 AND role != 'superadmin' ORDER BY createdAt ASC`
+    ).all(...f.params);
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/register', authenticateToken, isAdmin, (req, res) => {
+app.post('/api/register', authenticateToken, isGestorOrAbove, (req, res) => {
   const { username, password, name, role } = req.body;
   if (!username || !password || !name) return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
+
+  // Gestor só pode criar operadores e dentro do limite de 5
+  if (req.user.role === 'gestor') {
+    const allowedRole = 'operador';
+    const count = db.prepare(
+      "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'operador' AND isDeleted = 0"
+    ).get(req.user.establishmentId);
+    if (count.c >= 5) {
+      return res.status(400).json({ error: 'Limite de 5 funcionários atingido.' });
+    }
+    const id = uuidv4();
+    const hashedPassword = bcrypt.hashSync(password, 10);
+    try {
+      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, username, hashedPassword, name, allowedRole, req.user.establishmentId, 1, 0, new Date().toISOString());
+      return res.status(201).json({ message: 'Funcionário criado com sucesso!' });
+    } catch (err) {
+      return res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
+    }
+  }
+
+  // Superadmin pode criar qualquer role
   const id = uuidv4();
   const hashedPassword = bcrypt.hashSync(password, 10);
+  const assignedRole = role || 'operador';
+  const estId = req.body.establishmentId || null;
   try {
-    db.prepare(`INSERT INTO users (id, username, password, name, role, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, username, hashedPassword, name, role || 'staff', 1, 0, new Date().toISOString());
+    db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, username, hashedPassword, name, assignedRole, estId, 1, 0, new Date().toISOString());
     res.status(201).json({ message: 'Usuário criado com sucesso!' });
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar usuário. Talvez o login já exista.' });
+    res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
   }
 });
 
-app.put('/api/users/:id', authenticateToken, isAdmin, (req, res) => {
+app.put('/api/users/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const { name, role, password, username } = req.body;
   try {
-    let sql = 'UPDATE users SET name = ?, role = ?, username = ?';
-    const params = [name, role, username];
-    if (password) {
-      sql += ', password = ?';
-      params.push(bcrypt.hashSync(password, 10));
+    // Verificar se o usuário pertence ao estabelecimento (gestor)
+    if (req.user.role === 'gestor') {
+      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ?").get(id, req.user.establishmentId);
+      if (!u) return res.status(403).json({ error: 'Sem permissão para editar este usuário.' });
     }
+    let sql = 'UPDATE users SET name = ?, username = ?';
+    const params = [name, username];
+    if (password) { sql += ', password = ?'; params.push(bcrypt.hashSync(password, 10)); }
+    if (req.user.role === 'superadmin' && role) { sql += ', role = ?'; params.push(role); }
     sql += ' WHERE id = ?';
     params.push(id);
     db.prepare(sql).run(...params);
@@ -155,10 +217,14 @@ app.put('/api/users/:id', authenticateToken, isAdmin, (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/status', authenticateToken, isAdmin, (req, res) => {
+app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const { active } = req.body;
   try {
+    if (req.user.role === 'gestor') {
+      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ?").get(id, req.user.establishmentId);
+      if (!u) return res.status(403).json({ error: 'Sem permissão.' });
+    }
     db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
     res.json({ message: `Usuário ${active ? 'ativado' : 'desativado'}!` });
   } catch (err) {
@@ -166,9 +232,13 @@ app.patch('/api/users/:id/status', authenticateToken, isAdmin, (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/delete', authenticateToken, isAdmin, (req, res) => {
+app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   try {
+    if (req.user.role === 'gestor') {
+      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
+      if (!u) return res.status(403).json({ error: 'Sem permissão para excluir este usuário.' });
+    }
     db.prepare('UPDATE users SET isDeleted = 1 WHERE id = ?').run(id);
     res.json({ message: 'Usuário excluído com sucesso!' });
   } catch (err) {
@@ -192,35 +262,36 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
 });
 
 // ==============================
-// ROTAS DE PRODUTOS
+// PRODUTOS (isolados por estabelecimento)
 // ==============================
-
 app.get('/api/products', authenticateToken, (req, res) => {
   try {
-    const products = db.prepare('SELECT * FROM products ORDER BY createdAt DESC').all();
+    const f = estFilterWhere(req);
+    const products = db.prepare(`SELECT * FROM products ${f.clause} ORDER BY createdAt DESC`).all(...f.params);
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/products', authenticateToken, isAdmin, (req, res) => {
+app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
   const { barcode, name, costPrice, sellPrice, stock, category } = req.body;
   if (!name || costPrice == null || sellPrice == null) {
     return res.status(400).json({ error: 'Nome, preço de custo e preço de venda são obrigatórios.' });
   }
   const id = uuidv4();
   const now = new Date().toISOString();
+  const estId = req.user.role === 'superadmin' ? req.body.establishmentId : req.user.establishmentId;
   try {
-    db.prepare(`INSERT INTO products (id, barcode, name, costPrice, sellPrice, stock, category, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral', now, now);
+    db.prepare(`INSERT INTO products (id, barcode, name, costPrice, sellPrice, stock, category, establishmentId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral', estId, now, now);
     res.status(201).json({ id, message: 'Produto inserido com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/products/:id', authenticateToken, isAdmin, (req, res) => {
+app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const now = new Date().toISOString();
@@ -228,13 +299,17 @@ app.put('/api/products/:id', authenticateToken, isAdmin, (req, res) => {
     let sql = 'UPDATE products SET ';
     const params = [];
     for (const [key, value] of Object.entries(updates)) {
-      if (!['id', 'createdAt', 'updatedAt'].includes(key)) {
+      if (!['id', 'createdAt', 'updatedAt', 'establishmentId'].includes(key)) {
         sql += `${key} = ?, `;
         params.push(value);
       }
     }
     sql += `updatedAt = ? WHERE id = ?`;
     params.push(now, id);
+    if (req.user.role !== 'superadmin') {
+      sql += ' AND establishmentId = ?';
+      params.push(req.user.establishmentId);
+    }
     db.prepare(sql).run(...params);
     res.json({ message: 'Produto atualizado com sucesso!' });
   } catch (err) {
@@ -242,10 +317,14 @@ app.put('/api/products/:id', authenticateToken, isAdmin, (req, res) => {
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, isAdmin, (req, res) => {
+app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   try {
-    db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    if (req.user.role !== 'superadmin') {
+      db.prepare('DELETE FROM products WHERE id = ? AND establishmentId = ?').run(id, req.user.establishmentId);
+    } else {
+      db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    }
     res.json({ message: 'Produto excluído!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -265,12 +344,37 @@ app.patch('/api/products/:id/stock', authenticateToken, (req, res) => {
 });
 
 // ==============================
-// ROTAS DE VENDAS
+// VENDAS (isoladas por estabelecimento)
 // ==============================
-
-app.get('/api/sales', authenticateToken, isAdmin, (req, res) => {
+app.get('/api/sales', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
-    const sales = db.prepare('SELECT * FROM sales ORDER BY createdAt DESC').all();
+    const f = estFilterWhere(req);
+    const sales = db.prepare(`SELECT * FROM sales ${f.clause} ORDER BY createdAt DESC`).all(...f.params);
+    const populatedSales = sales.map(sale => {
+      const items = db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(sale.id);
+      return { ...sale, items };
+    });
+    res.json(populatedSales);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rota especial para operadores verem comprovantes do dia
+app.get('/api/sales/today', authenticateToken, (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const estId = req.user.establishmentId;
+    if (!estId) return res.status(403).json({ error: 'Sem estabelecimento.' });
+
+    const sales = db.prepare(
+      `SELECT * FROM sales WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ? ORDER BY createdAt DESC`
+    ).all(estId, today.toISOString(), tomorrow.toISOString());
+
     const populatedSales = sales.map(sale => {
       const items = db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(sale.id);
       return { ...sale, items };
@@ -288,10 +392,11 @@ app.post('/api/sales', authenticateToken, (req, res) => {
   }
   const saleId = uuidv4();
   const now = new Date().toISOString();
+  const estId = req.user.establishmentId;
 
   const insertSale = db.transaction((items, totalAmount, paymentMethod, userId) => {
-    db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, now);
+    db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, estId, now);
     const insertItemStmt = db.prepare(`INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice) VALUES (?, ?, ?, ?, ?, ?)`);
     const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ?`);
     for (const item of items) {
@@ -310,19 +415,134 @@ app.post('/api/sales', authenticateToken, (req, res) => {
 });
 
 // ==============================
-// ROTAS DE IA
+// SUPER ADMIN — ESTABELECIMENTOS
 // ==============================
+app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const total = db.prepare('SELECT COUNT(*) as c FROM establishments').get().c;
+    const active = db.prepare("SELECT COUNT(*) as c FROM establishments WHERE subscriptionStatus = 'active'").get().c;
+    const overdue = db.prepare("SELECT COUNT(*) as c FROM establishments WHERE subscriptionStatus = 'overdue'").get().c;
+    const suspended = db.prepare("SELECT COUNT(*) as c FROM establishments WHERE subscriptionStatus = 'suspended'").get().c;
+    const totalUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE role != 'superadmin' AND isDeleted = 0").get().c;
+    const totalRevenue = db.prepare("SELECT COALESCE(SUM(totalAmount), 0) as r FROM sales").get().r;
+    const totalSales = db.prepare("SELECT COUNT(*) as c FROM sales").get().c;
+    res.json({ total, active, overdue, suspended, totalUsers, totalRevenue, totalSales });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
+app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const ests = db.prepare('SELECT * FROM establishments ORDER BY createdAt DESC').all();
+    const result = ests.map(est => {
+      const userCount = db.prepare(
+        "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND isDeleted = 0 AND role != 'superadmin'"
+      ).get(est.id).c;
+      const salesCount = db.prepare("SELECT COUNT(*) as c FROM sales WHERE establishmentId = ?").get(est.id).c;
+      const revenueMonth = db.prepare(
+        "SELECT COALESCE(SUM(totalAmount), 0) as r FROM sales WHERE establishmentId = ? AND createdAt >= ?"
+      ).get(est.id, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()).r;
+      return { ...est, userCount, salesCount, revenueMonth };
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res) => {
+  const { name, ownerName, email, phone, plan, subscriptionDueDate, gestorUsername, gestorPassword, gestorName } = req.body;
+  if (!name || !gestorUsername || !gestorPassword || !gestorName) {
+    return res.status(400).json({ error: 'Nome do estabelecimento, login, senha e nome do gestor são obrigatórios.' });
+  }
+
+  const estId = uuidv4();
+  const gestorId = uuidv4();
+  const now = new Date().toISOString();
+  const dueDate = subscriptionDueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const createEstAndGestor = db.transaction(() => {
+      db.prepare(`INSERT INTO establishments (id, name, ownerName, email, phone, plan, subscriptionStatus, subscriptionDueDate, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
+        .run(estId, name, ownerName || gestorName, email || null, phone || null, plan || 'basic', dueDate, now);
+      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
+        VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, ?)`)
+        .run(gestorId, gestorUsername, bcrypt.hashSync(gestorPassword, 10), gestorName, estId, now);
+    });
+    createEstAndGestor();
+    res.status(201).json({ id: estId, message: 'Estabelecimento criado com sucesso!' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao criar. Login do gestor pode já estar em uso.' });
+  }
+});
+
+app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
+  const { id } = req.params;
+  const { name, ownerName, email, phone, plan, subscriptionStatus, subscriptionDueDate, notes } = req.body;
+  try {
+    db.prepare(`UPDATE establishments SET name=?, ownerName=?, email=?, phone=?, plan=?, subscriptionStatus=?, subscriptionDueDate=?, notes=? WHERE id=?`)
+      .run(name, ownerName, email, phone, plan, subscriptionStatus, subscriptionDueDate, notes || null, id);
+    res.json({ message: 'Estabelecimento atualizado!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/establishments/:id/subscription', authenticateToken, isSuperAdmin, (req, res) => {
+  const { id } = req.params;
+  const { subscriptionStatus, subscriptionDueDate } = req.body;
+  try {
+    db.prepare('UPDATE establishments SET subscriptionStatus=?, subscriptionDueDate=? WHERE id=?')
+      .run(subscriptionStatus, subscriptionDueDate, id);
+    res.json({ message: 'Assinatura atualizada!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
+  const { id } = req.params;
+  try {
+    db.prepare('UPDATE users SET isDeleted = 1 WHERE establishmentId = ?').run(id);
+    db.prepare('DELETE FROM establishments WHERE id = ?').run(id);
+    res.json({ message: 'Estabelecimento removido!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Usuários de um estabelecimento (para super admin)
+app.get('/api/admin/establishments/:id/users', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const users = db.prepare(
+      "SELECT id, username, name, role, active, createdAt FROM users WHERE establishmentId = ? AND isDeleted = 0 ORDER BY role, name"
+    ).all(req.params.id);
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==============================
+// ROTAS DE IA (com isolamento)
+// ==============================
 app.get('/api/ai/stock-predictions', authenticateToken, (req, res) => {
   try {
-    const products = db.prepare('SELECT * FROM products').all();
+    const f = estFilterWhere(req);
+    const products = db.prepare(`SELECT * FROM products ${f.clause}`).all(...f.params);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const estClause = req.user.role !== 'superadmin' ? 'AND s.establishmentId = ?' : '';
+    const estParams = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
+
     const salesInPeriod = db.prepare(`
       SELECT si.productId, SUM(si.quantity) as totalSold
       FROM sale_items si INNER JOIN sales s ON si.saleId = s.id
-      WHERE s.createdAt >= ? GROUP BY si.productId
-    `).all(thirtyDaysAgo.toISOString());
+      WHERE s.createdAt >= ? ${estClause} GROUP BY si.productId
+    `).all(thirtyDaysAgo.toISOString(), ...estParams);
 
     const salesMap = {};
     salesInPeriod.forEach(s => { salesMap[s.productId] = s.totalSold; });
@@ -349,23 +569,28 @@ app.get('/api/ai/stock-predictions', authenticateToken, (req, res) => {
   }
 });
 
-app.post('/api/ai/chat', authenticateToken, isAdmin, async (req, res) => {
-  if (!geminiModel) return res.status(503).json({ error: 'Gemini AI não configurado. Defina a GEMINI_API_KEY no servidor.' });
+app.post('/api/ai/chat', authenticateToken, isGestorOrAbove, async (req, res) => {
+  if (!geminiModel) return res.status(503).json({ error: 'Gemini AI não configurado.' });
   const { message } = req.body;
   if (!message) return res.status(400).json({ error: 'Mensagem é obrigatória.' });
 
   try {
-    const products = db.prepare('SELECT name, stock, sellPrice, costPrice, category FROM products').all();
+    const f = estFilterWhere(req);
+    const products = db.prepare(`SELECT name, stock, sellPrice, costPrice, category FROM products ${f.clause}`).all(...f.params);
     const totalStockValue = products.reduce((sum, p) => sum + (p.stock * p.costPrice), 0);
     const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const recentSales = db.prepare(`SELECT s.totalAmount FROM sales s WHERE s.createdAt >= ?`).all(sevenDaysAgo.toISOString());
-    const weekRevenue = recentSales.reduce((sum, s) => sum + s.totalAmount, 0);
     const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const estClause = req.user.role !== 'superadmin' ? 'AND s.establishmentId = ?' : '';
+    const estParams = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
+
+    const recentSales = db.prepare(`SELECT s.totalAmount FROM sales s WHERE s.createdAt >= ? ${estClause}`).all(sevenDaysAgo.toISOString(), ...estParams);
+    const weekRevenue = recentSales.reduce((sum, s) => sum + s.totalAmount, 0);
     const topSellers = db.prepare(`
       SELECT si.name, SUM(si.quantity) as totalQty, SUM(si.totalPrice) as totalRev
       FROM sale_items si INNER JOIN sales s ON si.saleId = s.id
-      WHERE s.createdAt >= ? GROUP BY si.productId ORDER BY totalQty DESC LIMIT 5
-    `).all(thirtyDaysAgo.toISOString());
+      WHERE s.createdAt >= ? ${estClause} GROUP BY si.productId ORDER BY totalQty DESC LIMIT 5
+    `).all(thirtyDaysAgo.toISOString(), ...estParams);
     const lowStock = products.filter(p => p.stock <= 5);
 
     const contextPrompt = `Você é o assistente de gestão inteligente de uma distribuidora de bebidas.
@@ -381,9 +606,6 @@ ${topSellers.map((t, i) => `${i + 1}. ${t.name} — ${t.totalQty} un. — R$ ${t
 BAIXO ESTOQUE (≤5 un):
 ${lowStock.length > 0 ? lowStock.map(p => `- ${p.name}: ${p.stock} un.`).join('\n') : 'Nenhum'}
 
-PRODUTOS:
-${products.map(p => `- ${p.name} | ${p.category} | Est: ${p.stock} | Venda: R$${p.sellPrice} | Custo: R$${p.costPrice}`).join('\n')}
-
 PERGUNTA: ${message}
 
 Responda de forma objetiva com dados. Sugira ações quando aplicável.`;
@@ -392,7 +614,7 @@ Responda de forma objetiva com dados. Sugira ações quando aplicável.`;
     res.json({ response: result.response.text() });
   } catch (err) {
     console.error('[Gemini Chat Error]', err.message);
-    res.status(500).json({ error: 'Erro ao processar sua pergunta. Tente novamente.' });
+    res.status(500).json({ error: 'Erro ao processar sua pergunta.' });
   }
 });
 
@@ -402,13 +624,17 @@ app.post('/api/ai/cross-sell', authenticateToken, async (req, res) => {
   if (!cartItems || cartItems.length === 0) return res.json({ suggestion: null, productName: null });
 
   try {
+    const estClause = req.user.role !== 'superadmin' ? 'AND s.establishmentId = ?' : '';
+    const estParams = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
     const placeholders = cartItems.map(() => '?').join(',');
+
     const coOccurrences = db.prepare(`
       SELECT si2.name, COUNT(*) as frequency
       FROM sale_items si1 INNER JOIN sale_items si2 ON si1.saleId = si2.saleId AND si1.productId != si2.productId
-      WHERE si1.name IN (${placeholders}) AND si2.name NOT IN (${placeholders})
+      INNER JOIN sales s ON si1.saleId = s.id
+      WHERE si1.name IN (${placeholders}) AND si2.name NOT IN (${placeholders}) ${estClause}
       GROUP BY si2.productId ORDER BY frequency DESC LIMIT 5
-    `).all(...cartItems, ...cartItems);
+    `).all(...cartItems, ...cartItems, ...estParams);
 
     if (coOccurrences.length === 0) return res.json({ suggestion: null, productName: null });
 
@@ -416,9 +642,8 @@ app.post('/api/ai/cross-sell', authenticateToken, async (req, res) => {
     const prompt = `Você é assistente de vendas de distribuidora de bebidas.
 O cliente compra: ${cartItems.join(', ')}.
 Histórico de compras casadas: ${topCoProducts}.
-Sugira 1 produto complementar. Use o histórico e seu conhecimento (cerveja→gelo/salgadinho, destilados→energético/gelo, refrigerante→chocolate).
-Resposta em NO MÁXIMO 10 palavras. Formato EXATO: PRODUTO|FRASE_CURTA
-Exemplo: Gelo de Coco|Ideal para acompanhar seu Destilado!`;
+Sugira 1 produto complementar. Use o histórico e seu conhecimento.
+Resposta em NO MÁXIMO 10 palavras. Formato EXATO: PRODUTO|FRASE_CURTA`;
 
     const result = await geminiModel.generateContent(prompt);
     const text = result.response.text().trim();
@@ -426,54 +651,43 @@ Exemplo: Gelo de Coco|Ideal para acompanhar seu Destilado!`;
     const suggestedName = parts.length >= 2 ? parts[0].trim() : text;
     const suggestedText = parts.length >= 2 ? parts[1].trim() : text;
 
-    const inStockProduct = db.prepare('SELECT id, name, stock FROM products WHERE name = ? COLLATE NOCASE').get(suggestedName);
+    const estIdFilter = req.user.role !== 'superadmin' ? 'AND establishmentId = ?' : '';
+    const estIdParam = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
+    const inStockProduct = db.prepare(`SELECT id, name, stock FROM products WHERE name = ? COLLATE NOCASE ${estIdFilter}`).get(suggestedName, ...estIdParam);
     if (inStockProduct && inStockProduct.stock > 0) {
       return res.json({ suggestion: suggestedText, productName: inStockProduct.name });
     }
-
-    const now = new Date().toISOString();
-    try {
-      const existing = db.prepare('SELECT id, count FROM ai_suggestions WHERE productName = ? COLLATE NOCASE').get(suggestedName);
-      if (existing) {
-        db.prepare('UPDATE ai_suggestions SET count = count + 1, updatedAt = ?, suggestion = ? WHERE id = ?').run(now, suggestedText, existing.id);
-      } else {
-        db.prepare('INSERT INTO ai_suggestions (id, productName, suggestion, count, updatedAt) VALUES (?, ?, ?, ?, ?)').run(uuidv4(), suggestedName, suggestedText, 1, now);
-      }
-    } catch (dbErr) {
-      console.error('[Cross-sell DB Error]', dbErr.message);
-    }
     res.json({ suggestion: null, productName: null });
   } catch (err) {
-    console.error('[Gemini Cross-sell Error]', err.message);
     res.json({ suggestion: null, productName: null });
   }
 });
 
-app.get('/api/ai/suggestions', authenticateToken, isAdmin, (req, res) => {
+app.get('/api/ai/suggestions', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
-    res.json(db.prepare('SELECT * FROM ai_suggestions ORDER BY count DESC, updatedAt DESC').all());
+    const f = estFilterWhere(req);
+    res.json(db.prepare(`SELECT * FROM ai_suggestions ${f.clause} ORDER BY count DESC, updatedAt DESC`).all(...f.params));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/ai/suggestions/:id', authenticateToken, isAdmin, (req, res) => {
+app.delete('/api/ai/suggestions/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
     db.prepare('DELETE FROM ai_suggestions WHERE id = ?').run(req.params.id);
-    res.json({ message: 'Sugestão removida com sucesso!' });
+    res.json({ message: 'Sugestão removida!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ==============================
-// ROTA DE SAÚDE (health check para VPS)
+// HEALTH CHECK
 // ==============================
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', env: NODE_ENV, timestamp: new Date().toISOString() });
 });
 
-// Fallback para SPA em produção
 if (NODE_ENV === 'production') {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
@@ -487,12 +701,5 @@ app.listen(PORT, HOST, () => {
   console.log(`🚀 Servidor rodando em http://${HOST}:${PORT} [${NODE_ENV}]`);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM recebido. Encerrando servidor...');
-  process.exit(0);
-});
-process.on('SIGINT', () => {
-  console.log('🛑 SIGINT recebido. Encerrando servidor...');
-  process.exit(0);
-});
+process.on('SIGTERM', () => { console.log('🛑 SIGTERM. Encerrando...'); process.exit(0); });
+process.on('SIGINT', () => { console.log('🛑 SIGINT. Encerrando...'); process.exit(0); });

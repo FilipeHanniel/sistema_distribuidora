@@ -6,6 +6,7 @@ export interface Product {
   sellPrice: number;
   stock: number;
   category: string;
+  establishmentId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -24,14 +25,34 @@ export interface Sale {
   totalAmount: number;
   paymentMethod: 'money' | 'card' | 'pix';
   fiscalStatus?: string;
+  establishmentId?: string;
   createdAt: string;
 }
+
+export type UserRole = 'superadmin' | 'gestor' | 'operador';
 
 export interface User {
   id: string;
   username: string;
   name: string;
-  role: 'admin' | 'staff';
+  role: UserRole;
   active: number;
+  establishmentId?: string;
+  createdAt: string;
+}
+
+export interface Establishment {
+  id: string;
+  name: string;
+  ownerName: string;
+  email?: string;
+  phone?: string;
+  plan: 'basic' | 'premium' | 'enterprise';
+  subscriptionStatus: 'active' | 'overdue' | 'suspended';
+  subscriptionDueDate?: string;
+  notes?: string;
+  userCount?: number;
+  salesCount?: number;
+  revenueMonth?: number;
   createdAt: string;
 }

@@ -7,6 +7,14 @@
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 2.5rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.history-export-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-shrink: 0;
 }
 
 .history-header h1 {

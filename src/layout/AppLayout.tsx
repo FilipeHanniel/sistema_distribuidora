@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
-  Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X
+  Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
+  Building2, Crown
 } from 'lucide-react';
 import './layout.css';
 
@@ -12,6 +13,7 @@ import Sales from '../pages/Sales';
 import Analytics from '../pages/Analytics';
 import Users from '../pages/Users';
 import SalesHistory from '../pages/SalesHistory';
+import SuperAdmin from '../pages/SuperAdmin';
 import StockAlertPopup from '../components/StockAlertPopup';
 import SaleSuccessPopup from '../components/SaleSuccessPopup';
 import PasswordModal from '../components/PasswordModal';
@@ -28,8 +30,9 @@ const PAGE_TITLES: Record<string, string> = {
   '/inventory': 'Controle de Estoque',
   '/sales': 'Ponto de Venda',
   '/analytics': 'Estatísticas',
-  '/users': 'Usuários',
+  '/users': 'Funcionários',
   '/comprovantes': 'Comprovantes de Venda',
+  '/superadmin': 'Painel Super Admin',
 };
 
 function TopbarTitle() {
@@ -41,7 +44,7 @@ function TopbarTitle() {
 export default function AppLayout() {
   const { fetchProducts } = useInventoryStore();
   const { fetchSales } = useSalesStore();
-  const { user, logout, isAuthenticated } = useAuthStore();
+  const { user, logout, isAuthenticated, isSuperAdmin, isGestor, isOperador } = useAuthStore();
   const { fetchUsers } = useUserStore();
   const { lastSale, showSuccessPopup, closeSuccessPopup } = useSalesStore();
 
@@ -49,18 +52,23 @@ export default function AppLayout() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
-
   const [isDark, setIsDark] = useState(() => localStorage.getItem('theme') === 'dark');
+
+  const superAdmin = isSuperAdmin();
+  const gestor = isGestor();
+  const operador = isOperador();
 
   useEffect(() => {
     if (isAuthenticated()) {
-      fetchProducts();
-      if (user?.role === 'admin') {
-        fetchSales();
-        fetchUsers();
+      if (!superAdmin) {
+        fetchProducts();
+        if (gestor) {
+          fetchSales();
+          fetchUsers();
+        }
       }
     }
-  }, [fetchProducts, fetchSales, fetchUsers, isAuthenticated, user]);
+  }, [fetchProducts, fetchSales, fetchUsers, isAuthenticated, superAdmin, gestor]);
 
   useEffect(() => {
     if (isDark) {
@@ -72,7 +80,6 @@ export default function AppLayout() {
     }
   }, [isDark]);
 
-  // Fechar menu ao clicar fora
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
@@ -85,24 +92,38 @@ export default function AppLayout() {
 
   if (!isAuthenticated()) return <Login />;
 
-  const isAdmin = user?.role === 'admin';
+  // ---- Navegação por perfil ----
+  type NavItem = { to: string; icon: JSX.Element; label: string; end?: boolean };
 
-  const navItems = [
-    { to: '/', icon: <LayoutDashboard size={20} />, label: 'Painel', end: true },
-    ...(isAdmin ? [{ to: '/inventory', icon: <Package size={20} />, label: 'Estoque' }] : []),
-    { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
-    ...(isAdmin ? [
+  let navItems: NavItem[] = [];
+  if (superAdmin) {
+    navItems = [
+      { to: '/superadmin', icon: <Crown size={20} />, label: 'Painel Geral', end: true },
+    ];
+  } else if (gestor) {
+    navItems = [
+      { to: '/', icon: <LayoutDashboard size={20} />, label: 'Painel', end: true },
+      { to: '/inventory', icon: <Package size={20} />, label: 'Estoque' },
+      { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
       { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Estatísticas' },
-      { to: '/users', icon: <UsersIcon size={20} />, label: 'Usuários' },
+      { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
-    ] : []),
-  ];
+    ];
+  } else {
+    // operador
+    navItems = [
+      { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda', end: true },
+      { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes do Dia' },
+    ];
+  }
+
+  const roleLabel = superAdmin ? 'Super Admin' : gestor ? 'Gestor' : 'Operador';
+  const roleColor = superAdmin ? '#f59e0b' : gestor ? 'var(--primary)' : '#16a34a';
 
   return (
     <BrowserRouter>
       <div className="app-layout">
 
-        {/* Overlay mobile */}
         {isSidebarOpen && <div className="sidebar-overlay" onClick={() => setIsSidebarOpen(false)} />}
 
         {/* Sidebar */}
@@ -135,6 +156,14 @@ export default function AppLayout() {
               <X size={18} />
             </button>
           </div>
+
+          {/* Badge de estabelecimento */}
+          {!superAdmin && user?.establishmentName && (
+            <div className="sidebar-est-badge">
+              <Building2 size={13} />
+              <span>{user.establishmentName}</span>
+            </div>
+          )}
 
           <div className="sidebar-section-label">Menu Principal</div>
 
@@ -179,10 +208,12 @@ export default function AppLayout() {
                   className={`user-info ${isUserMenuOpen ? 'active' : ''}`}
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 >
-                  <div className="avatar">{user?.name ? user.name[0].toUpperCase() : 'U'}</div>
+                  <div className="avatar" style={{ background: `linear-gradient(135deg, ${roleColor}, #8b5cf6)` }}>
+                    {user?.name ? user.name[0].toUpperCase() : 'U'}
+                  </div>
                   <div className="user-details">
                     <span className="user-name">{user?.name}</span>
-                    <span className="user-role">{isAdmin ? 'Administrador' : 'Operador'}</span>
+                    <span className="user-role" style={{ color: roleColor }}>{roleLabel}</span>
                   </div>
                   <ChevronDown size={16} className={`chevron ${isUserMenuOpen ? 'open' : ''}`} />
                 </div>
@@ -190,10 +221,17 @@ export default function AppLayout() {
                 {isUserMenuOpen && (
                   <div className="profile-dropdown">
                     <div className="dropdown-header">
-                      <div className="avatar avatar-lg">{user?.name ? user.name[0].toUpperCase() : 'U'}</div>
+                      <div className="avatar avatar-lg" style={{ background: `linear-gradient(135deg, ${roleColor}, #8b5cf6)` }}>
+                        {user?.name ? user.name[0].toUpperCase() : 'U'}
+                      </div>
                       <div>
                         <div className="dropdown-name">{user?.name}</div>
-                        <div className="dropdown-role">{isAdmin ? 'Administrador' : 'Operador'}</div>
+                        <div className="dropdown-role" style={{ color: roleColor }}>{roleLabel}</div>
+                        {user?.establishmentName && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {user.establishmentName}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="dropdown-divider" />
@@ -211,12 +249,25 @@ export default function AppLayout() {
 
           <div className="content-scroll">
             <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/inventory" element={isAdmin ? <Inventory /> : <Navigate to="/" />} />
-              <Route path="/sales" element={<Sales />} />
-              <Route path="/analytics" element={isAdmin ? <Analytics /> : <Navigate to="/" />} />
-              <Route path="/users" element={isAdmin ? <Users /> : <Navigate to="/" />} />
-              <Route path="/comprovantes" element={isAdmin ? <SalesHistory /> : <Navigate to="/" />} />
+              {/* Super Admin routes */}
+              <Route path="/superadmin" element={superAdmin ? <SuperAdmin /> : <Navigate to={gestor ? '/' : '/sales'} />} />
+
+              {/* Gestor routes */}
+              <Route path="/" element={!operador ? <Dashboard /> : <Navigate to="/sales" />} />
+              <Route path="/inventory" element={gestor ? <Inventory /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/analytics" element={gestor ? <Analytics /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/users" element={gestor ? <Users /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+
+              {/* Shared routes */}
+              <Route path="/sales" element={!superAdmin ? <Sales /> : <Navigate to="/superadmin" />} />
+              <Route path="/comprovantes" element={!superAdmin ? <SalesHistory /> : <Navigate to="/superadmin" />} />
+
+              {/* Default redirect */}
+              <Route path="*" element={
+                superAdmin ? <Navigate to="/superadmin" /> :
+                gestor ? <Navigate to="/" /> :
+                <Navigate to="/sales" />
+              } />
             </Routes>
           </div>
         </main>
@@ -234,7 +285,7 @@ export default function AppLayout() {
         )}
 
         <StockAlertPopup />
-        {isAdmin && <AiChatWidget />}
+        {gestor && <AiChatWidget />}
       </div>
     </BrowserRouter>
   );

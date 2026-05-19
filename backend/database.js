@@ -2,12 +2,27 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 
-// Criar (ou abrir se já existir) o arquivo do banco de dados SQLite na mesma pasta.
-const db = new Database(path.join(__dirname, 'banco.sqlite'), { verbose: console.log });
+const db = new Database(path.join(__dirname, 'banco.sqlite'));
 
-// Inicia as Tabelas se não existirem
 const initDB = () => {
-  // Tabela de Usuários
+  // ============================================================
+  // TABELAS PRINCIPAIS
+  // ============================================================
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS establishments (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      ownerName TEXT,
+      email TEXT,
+      phone TEXT,
+      plan TEXT DEFAULT 'basic',
+      subscriptionStatus TEXT DEFAULT 'active',
+      subscriptionDueDate TEXT,
+      notes TEXT,
+      createdAt TEXT
+    )
+  `).run();
+
   db.prepare(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -15,13 +30,13 @@ const initDB = () => {
       password TEXT,
       name TEXT,
       role TEXT,
+      establishmentId TEXT,
       active INTEGER DEFAULT 1,
       isDeleted INTEGER DEFAULT 0,
       createdAt TEXT
     )
   `).run();
 
-  // Tabela de Produtos (Inventory)
   db.prepare(`
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
@@ -31,12 +46,12 @@ const initDB = () => {
       sellPrice REAL,
       stock INTEGER,
       category TEXT,
+      establishmentId TEXT,
       createdAt TEXT,
       updatedAt TEXT
     )
   `).run();
 
-  // Tabela de Vendas (Sales) - Atualizada com paymentMethod e fiscalStatus
   db.prepare(`
     CREATE TABLE IF NOT EXISTS sales (
       id TEXT PRIMARY KEY,
@@ -44,39 +59,22 @@ const initDB = () => {
       paymentMethod TEXT,
       fiscalStatus TEXT,
       userId TEXT,
+      establishmentId TEXT,
       createdAt TEXT
     )
   `).run();
 
-  // Tabela de Sugestões Externas da IA (Oportunidades de Compra)
   db.prepare(`
     CREATE TABLE IF NOT EXISTS ai_suggestions (
       id TEXT PRIMARY KEY,
-      productName TEXT UNIQUE,
+      productName TEXT,
       suggestion TEXT,
       count INTEGER DEFAULT 1,
+      establishmentId TEXT,
       updatedAt TEXT
     )
   `).run();
 
-  // Migrações para bancos existentes
-  try {
-    db.prepare('ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1').run();
-  } catch (e) {}
-  try {
-    db.prepare('ALTER TABLE users ADD COLUMN isDeleted INTEGER DEFAULT 0').run();
-  } catch (e) {}
-  try {
-    db.prepare('ALTER TABLE sales ADD COLUMN paymentMethod TEXT').run();
-  } catch (e) {}
-  try {
-    db.prepare('ALTER TABLE sales ADD COLUMN fiscalStatus TEXT').run();
-  } catch (e) {}
-  try {
-    db.prepare('ALTER TABLE sales ADD COLUMN userId TEXT').run();
-  } catch (e) {}
-
-  // Tabela de Itens da Venda (SaleItems) - Relacionado com Sale
   db.prepare(`
     CREATE TABLE IF NOT EXISTS sale_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,28 +88,74 @@ const initDB = () => {
     )
   `).run();
 
-  // Criar Usuário Admin Padrão se a tabela estiver vazia
-  const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-  if (userCount === 0) {
+  // ============================================================
+  // MIGRAÇÕES PARA BANCOS EXISTENTES
+  // ============================================================
+  const migrations = [
+    'ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1',
+    'ALTER TABLE users ADD COLUMN isDeleted INTEGER DEFAULT 0',
+    'ALTER TABLE users ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE products ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE sales ADD COLUMN paymentMethod TEXT',
+    'ALTER TABLE sales ADD COLUMN fiscalStatus TEXT',
+    'ALTER TABLE sales ADD COLUMN userId TEXT',
+    'ALTER TABLE sales ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
+  ];
+  for (const sql of migrations) {
+    try { db.prepare(sql).run(); } catch (e) {}
+  }
+
+  // ============================================================
+  // ESTABELECIMENTO PADRÃO (para dados legados)
+  // ============================================================
+  const DEFAULT_EST_ID = 'default-establishment-1';
+  const defaultEst = db.prepare('SELECT id FROM establishments WHERE id = ?').get(DEFAULT_EST_ID);
+  if (!defaultEst) {
+    const dueDate = new Date();
+    dueDate.setFullYear(dueDate.getFullYear() + 1);
+    db.prepare(`
+      INSERT INTO establishments (id, name, ownerName, plan, subscriptionStatus, subscriptionDueDate, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(DEFAULT_EST_ID, 'Estabelecimento Padrão', 'Administrador', 'basic', 'active',
+      dueDate.toISOString(), new Date().toISOString());
+  }
+
+  // Migrar roles legados: admin→gestor, staff→operador
+  try {
+    db.prepare("UPDATE users SET role = 'gestor' WHERE role = 'admin' AND (establishmentId IS NULL OR establishmentId = ?) AND role != 'superadmin'").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE users SET role = 'operador' WHERE role = 'staff' AND (establishmentId IS NULL OR establishmentId = ?)").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE users SET establishmentId = ? WHERE establishmentId IS NULL AND role != 'superadmin'").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE products SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE sales SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
+    db.prepare("UPDATE ai_suggestions SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
+  } catch (e) {}
+
+  // ============================================================
+  // CRIAR SUPERADMIN SE NÃO EXISTIR
+  // ============================================================
+  const superAdminExists = db.prepare("SELECT id FROM users WHERE role = 'superadmin'").get();
+  if (!superAdminExists) {
     const salt = bcrypt.genSaltSync(10);
-    const adminPassword = bcrypt.hashSync('admin123', salt);
-    const operadorPassword = bcrypt.hashSync('123', salt);
-
-    // Criar Admin
+    const SUPERADMIN_PWD = process.env.SUPERADMIN_PASSWORD || 'superadmin123';
     db.prepare(`
-      INSERT INTO users (id, username, password, name, role, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run('admin-uuid-1', 'admin', adminPassword, 'Administrador', 'admin', new Date().toISOString());
-    
-    // Criar Operador
-    db.prepare(`
-      INSERT INTO users (id, username, password, name, role, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run('operador-uuid-1', 'operador', operadorPassword, 'Operador Fulano', 'staff', new Date().toISOString());
+      INSERT INTO users (id, username, password, name, role, active, isDeleted, createdAt)
+      VALUES ('superadmin-uuid-1', 'superadmin', ?, 'Super Administrador', 'superadmin', 1, 0, ?)
+    `).run(bcrypt.hashSync(SUPERADMIN_PWD, salt), new Date().toISOString());
+    console.log('🔑 SuperAdmin criado: superadmin / ' + SUPERADMIN_PWD);
+  }
 
-    console.log('Usuários padrão criados:');
-    console.log('- Admin: admin / admin123');
-    console.log('- Operador: operador / 123');
+  // Criar gestor padrão se não existir nenhum no estabelecimento padrão
+  const gestorCount = db.prepare(
+    "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'gestor' AND isDeleted = 0"
+  ).get(DEFAULT_EST_ID);
+  if (gestorCount.c === 0) {
+    const salt = bcrypt.genSaltSync(10);
+    db.prepare(`
+      INSERT OR IGNORE INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
+      VALUES ('gestor-default-1', 'gestor', ?, 'Gestor Padrão', 'gestor', ?, 1, 0, ?)
+    `).run(bcrypt.hashSync('gestor123', salt), DEFAULT_EST_ID, new Date().toISOString());
+    console.log('👔 Gestor padrão: gestor / gestor123');
   }
 
   console.log('Banco de Dados SQLite conectado e tabelas verificadas!');
