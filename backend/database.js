@@ -3,6 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 
 const db = new Database(path.join(__dirname, 'banco.sqlite'));
+db.pragma('foreign_keys = ON');
 
 const initDB = () => {
   // ============================================================
@@ -119,6 +120,18 @@ const initDB = () => {
     'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
   ];
   for (const sql of migrations) {
+    try { db.prepare(sql).run(); } catch (e) {}
+  }
+
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_users_establishment ON users(establishmentId, isDeleted, role)',
+    'CREATE INDEX IF NOT EXISTS idx_products_establishment ON products(establishmentId, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_sales_establishment ON sales(establishmentId, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(saleId)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_suggestions_establishment ON ai_suggestions(establishmentId, updatedAt)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_establishment ON payments(establishmentId, createdAt)',
+  ];
+  for (const sql of indexes) {
     try { db.prepare(sql).run(); } catch (e) {}
   }
 

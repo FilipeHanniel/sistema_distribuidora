@@ -119,6 +119,8 @@ export default function AppLayout() {
 
   const roleLabel = superAdmin ? 'Super Admin' : gestor ? 'Gestor' : 'Operador';
   const roleColor = superAdmin ? '#f59e0b' : gestor ? 'var(--primary)' : '#16a34a';
+  const brandName = !superAdmin && user?.establishmentName ? user.establishmentName : 'Distribuidora';
+  const brandCaption = superAdmin ? 'v2.0' : roleLabel;
 
   return (
     <BrowserRouter>
@@ -148,8 +150,8 @@ export default function AppLayout() {
                 </svg>
               </div>
               <div className="brand-text">
-                <h2>Distribuidora</h2>
-                <span className="brand-version">v2.0</span>
+                <h2 title={brandName}>{brandName}</h2>
+                <span className="brand-version">{brandCaption}</span>
               </div>
             </div>
             <button className="sidebar-close-btn" onClick={() => setIsSidebarOpen(false)}>

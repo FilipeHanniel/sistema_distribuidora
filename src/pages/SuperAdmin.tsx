@@ -3,7 +3,8 @@ import {
   Building2, TrendingUp, ShieldCheck, ShieldX,
   Plus, Edit2, Trash2, RefreshCw, Mail, Phone, Calendar,
   Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
-  CreditCard, Receipt, Banknote, X
+  CreditCard, Receipt, Banknote, X, Users, UserPlus,
+  BarChart3, ArrowUpRight, ArrowDownRight, Store
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import type { Establishment } from '../types';
@@ -40,7 +41,19 @@ const STATUS_LABELS: Record<string, string> = { active: 'Ativo', overdue: 'Em At
 interface Stats {
   total: number; active: number; overdue: number; suspended: number;
   totalUsers: number; totalRevenue: number; monthRevenue: number;
+  periodDays: number; periodRevenue: number; previousPeriodRevenue: number; revenueGrowthPct: number;
+  newUsers: number; previousNewUsers: number; userGrowthPct: number;
+  newEstablishments: number; previousNewEstablishments: number; establishmentGrowthPct: number;
+  mrr: number; arpa: number;
+  revenueSeries: MetricPoint[];
+  newUsersSeries: MetricPoint[];
+  usersByEstablishment: EstablishmentUserStat[];
+  topRevenueEstablishments: EstablishmentRevenueStat[];
 }
+
+interface MetricPoint { label: string; value: number; }
+interface EstablishmentUserStat { id: string; name: string; totalUsers: number; }
+interface EstablishmentRevenueStat { id: string; name: string; revenue: number; }
 
 interface EstUser { id: string; username: string; name: string; role: string; active: number; }
 
@@ -56,7 +69,8 @@ interface ManagedEstablishment extends Establishment {
   lastPayment?: Pick<Payment, 'paidAt' | 'amount'>;
 }
 
-type Tab = 'establishments' | 'billing';
+type Tab = 'platform' | 'establishments' | 'billing';
+type PeriodDays = 30 | 90 | 365;
 type Plan = Establishment['plan'];
 type SubscriptionStatus = Establishment['subscriptionStatus'];
 
@@ -82,7 +96,8 @@ const emptyForm: EstablishmentForm = {
 };
 
 export default function SuperAdmin() {
-  const [tab, setTab] = useState<Tab>('establishments');
+  const [tab, setTab] = useState<Tab>('platform');
+  const [periodDays, setPeriodDays] = useState<PeriodDays>(30);
   const [establishments, setEstablishments] = useState<ManagedEstablishment[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,13 +128,13 @@ export default function SuperAdmin() {
     try {
       const [estRes, statsRes] = await Promise.all([
         fetch(`${API}/admin/establishments`, { headers: getHeaders() }),
-        fetch(`${API}/admin/stats`, { headers: getHeaders() }),
+        fetch(`${API}/admin/stats?periodDays=${periodDays}`, { headers: getHeaders() }),
       ]);
       if (estRes.ok) setEstablishments(await estRes.json());
       if (statsRes.ok) setStats(await statsRes.json());
     } catch (e) { console.error(e); }
     setLoading(false);
-  }, []);
+  }, [periodDays]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -253,6 +268,62 @@ export default function SuperAdmin() {
     { label: 'Receita Total (assin.)', value: formatCurrency(stats.totalRevenue), icon: <DollarSign size={20} />, color: 'purple' },
   ] : [];
 
+  const periodLabel = periodDays === 30 ? '30 dias' : periodDays === 90 ? '90 dias' : '12 meses';
+  const revenueSeriesMax = Math.max(...(stats?.revenueSeries.map(p => p.value) || [0]), 1);
+  const userSeriesMax = Math.max(...(stats?.newUsersSeries.map(p => p.value) || [0]), 1);
+
+  const renderGrowth = (value: number) => {
+    const positive = value >= 0;
+    const Icon = positive ? ArrowUpRight : ArrowDownRight;
+    return (
+      <span className={`growth-pill ${positive ? 'positive' : 'negative'}`}>
+        <Icon size={13} /> {Math.abs(value).toLocaleString('pt-BR')}%
+      </span>
+    );
+  };
+
+  const platformCards = stats ? [
+    {
+      label: `Faturamento (${periodLabel})`,
+      value: formatCurrency(stats.periodRevenue),
+      note: `${formatCurrency(stats.previousPeriodRevenue)} no periodo anterior`,
+      icon: <DollarSign size={19} />,
+      trend: stats.revenueGrowthPct,
+    },
+    {
+      label: 'MRR ativo',
+      value: formatCurrency(stats.mrr),
+      note: `${stats.active} assinaturas ativas`,
+      icon: <TrendingUp size={19} />,
+    },
+    {
+      label: 'Usuarios totais',
+      value: stats.totalUsers,
+      note: `${stats.newUsers} novos em ${periodLabel}`,
+      icon: <Users size={19} />,
+      trend: stats.userGrowthPct,
+    },
+    {
+      label: 'Novos estabelecimentos',
+      value: stats.newEstablishments,
+      note: `${stats.total} contas cadastradas no total`,
+      icon: <Store size={19} />,
+      trend: stats.establishmentGrowthPct,
+    },
+    {
+      label: 'ARPA medio',
+      value: formatCurrency(stats.arpa),
+      note: 'Receita media por conta ativa',
+      icon: <BarChart3 size={19} />,
+    },
+    {
+      label: 'Risco operacional',
+      value: stats.overdue + stats.suspended,
+      note: `${stats.overdue} atrasadas, ${stats.suspended} suspensas`,
+      icon: <AlertTriangle size={19} />,
+    },
+  ] : [];
+
   return (
     <div className="page-container superadmin-page">
 
@@ -283,6 +354,9 @@ export default function SuperAdmin() {
 
       {/* Tabs */}
       <div className="sa-tabs">
+        <button className={`sa-tab ${tab === 'platform' ? 'active' : ''}`} onClick={() => setTab('platform')}>
+          <BarChart3 size={16} /> Plataforma
+        </button>
         <button className={`sa-tab ${tab === 'establishments' ? 'active' : ''}`} onClick={() => setTab('establishments')}>
           <Building2 size={16} /> Estabelecimentos
         </button>
@@ -290,6 +364,131 @@ export default function SuperAdmin() {
           <CreditCard size={16} /> Cobranças
         </button>
       </div>
+
+      {/* ===== TAB: PLATAFORMA ===== */}
+      {tab === 'platform' && (
+        loading ? (
+          <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /><p>Carregando...</p></div>
+        ) : stats && (
+          <div className="platform-dashboard">
+            <div className="platform-toolbar">
+              <div>
+                <h2>Estatisticas da plataforma</h2>
+                <p>Indicadores comerciais, crescimento e saude da base.</p>
+              </div>
+              <div className="period-segment" aria-label="Periodo das estatisticas">
+                {[30, 90, 365].map(days => (
+                  <button
+                    key={days}
+                    className={periodDays === days ? 'active' : ''}
+                    onClick={() => setPeriodDays(days as PeriodDays)}
+                  >
+                    {days === 365 ? '12m' : `${days}d`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="platform-kpis">
+              {platformCards.map(card => (
+                <div className="platform-kpi" key={card.label}>
+                  <div className="platform-kpi-top">
+                    <span className="platform-kpi-icon">{card.icon}</span>
+                    {typeof card.trend === 'number' && renderGrowth(card.trend)}
+                  </div>
+                  <span className="platform-kpi-label">{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <small>{card.note}</small>
+                </div>
+              ))}
+            </div>
+
+            <div className="platform-grid">
+              <section className="platform-panel platform-panel-wide">
+                <div className="platform-panel-header">
+                  <div>
+                    <h3>Faturamento por periodo</h3>
+                    <p>Pagamentos recebidos agrupados por {periodDays === 365 ? 'mes' : 'dia'}.</p>
+                  </div>
+                  <span>{formatCurrency(stats.periodRevenue)}</span>
+                </div>
+                <div className="metric-bars">
+                  {stats.revenueSeries.length === 0 ? (
+                    <div className="platform-empty-row">Nenhum pagamento recebido neste periodo.</div>
+                  ) : stats.revenueSeries.map(point => (
+                    <div className="metric-bar-row" key={point.label}>
+                      <span>{point.label}</span>
+                      <div className="metric-bar-track">
+                        <div className="metric-bar-fill revenue" style={{ width: `${Math.max(5, (point.value / revenueSeriesMax) * 100)}%` }} />
+                      </div>
+                      <strong>{formatCurrency(point.value)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="platform-panel">
+                <div className="platform-panel-header">
+                  <div>
+                    <h3>Novos usuarios</h3>
+                    <p>Entradas no periodo selecionado.</p>
+                  </div>
+                  <span>{stats.newUsers}</span>
+                </div>
+                <div className="metric-bars compact">
+                  {stats.newUsersSeries.length === 0 ? (
+                    <div className="platform-empty-row">Sem novos usuarios neste periodo.</div>
+                  ) : stats.newUsersSeries.map(point => (
+                    <div className="metric-bar-row" key={point.label}>
+                      <span>{point.label}</span>
+                      <div className="metric-bar-track">
+                        <div className="metric-bar-fill users" style={{ width: `${Math.max(8, (point.value / userSeriesMax) * 100)}%` }} />
+                      </div>
+                      <strong>{point.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="platform-panel">
+                <div className="platform-panel-header">
+                  <div>
+                    <h3>Usuarios por conta</h3>
+                    <p>Maiores bases ativas.</p>
+                  </div>
+                  <UserPlus size={18} />
+                </div>
+                <div className="platform-list">
+                  {stats.usersByEstablishment.map(item => (
+                    <div className="platform-list-row" key={item.id}>
+                      <span>{item.name}</span>
+                      <strong>{item.totalUsers}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="platform-panel">
+                <div className="platform-panel-header">
+                  <div>
+                    <h3>Top faturamento</h3>
+                    <p>Contas com mais pagamentos recebidos.</p>
+                  </div>
+                  <Receipt size={18} />
+                </div>
+                <div className="platform-list">
+                  {stats.topRevenueEstablishments.map(item => (
+                    <div className="platform-list-row" key={item.id}>
+                      <span>{item.name}</span>
+                      <strong>{formatCurrency(item.revenue)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        )
+      )}
 
       {/* ===== TAB: ESTABELECIMENTOS ===== */}
       {tab === 'establishments' && (

@@ -105,10 +105,35 @@ const isGestorOrAbove = (req, res, next) => {
   next();
 };
 
+const isTenantUser = (req, res, next) => {
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admin não opera dados de venda ou estoque diretamente.' });
+  }
+  if (!req.user.establishmentId) {
+    return res.status(403).json({ error: 'Usuário sem estabelecimento vinculado.' });
+  }
+  next();
+};
+
 // Helper: filtro WHERE por estabelecimento
 const estFilterWhere = (req) => {
   if (req.user.role === 'superadmin') return { clause: 'WHERE 1=1', params: [] };
   return { clause: 'WHERE establishmentId = ?', params: [req.user.establishmentId] };
+};
+
+const getTenantId = (req) => {
+  if (req.user.role === 'superadmin') return req.body.establishmentId || req.query.establishmentId || null;
+  return req.user.establishmentId;
+};
+
+const ensureEstablishmentExists = (establishmentId) => {
+  if (!establishmentId) return null;
+  return db.prepare('SELECT id, name FROM establishments WHERE id = ?').get(establishmentId);
+};
+
+const canAccessTenantRecord = (req, table, id) => {
+  if (req.user.role === 'superadmin') return db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(id);
+  return db.prepare(`SELECT id FROM ${table} WHERE id = ? AND establishmentId = ?`).get(id, req.user.establishmentId);
 };
 
 // ==============================
@@ -134,9 +159,15 @@ app.post('/api/login', (req, res) => {
       return res.status(401).json({ error: 'Senha incorreta.' });
     }
 
-    // Verificar assinatura (exceto superadmin)
+    // Verificar vínculo e assinatura (exceto superadmin)
+    if (user.role !== 'superadmin' && !user.establishmentId) {
+      return res.status(403).json({ error: 'Conta sem estabelecimento vinculado.' });
+    }
     if (user.role !== 'superadmin' && user.establishmentId) {
       const est = db.prepare('SELECT * FROM establishments WHERE id = ?').get(user.establishmentId);
+      if (!est) {
+        return res.status(403).json({ error: 'Estabelecimento não encontrado.' });
+      }
       if (est?.subscriptionStatus === 'suspended') {
         return res.status(403).json({ error: 'Acesso suspenso. Entre em contato com o administrador do sistema.' });
       }
@@ -214,6 +245,12 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, (req, res) => {
   const id = uuidv4();
   const assignedRole = role || 'operador';
   const estId = req.body.establishmentId || null;
+  if (assignedRole === 'superadmin') {
+    return res.status(400).json({ error: 'Super Admin não pode ser criado por esta rota.' });
+  }
+  if (!estId || !ensureEstablishmentExists(estId)) {
+    return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
+  }
   try {
     db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)`)
       .run(id, username, bcrypt.hashSync(password, 10), name, assignedRole, estId, new Date().toISOString());
@@ -227,14 +264,24 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const { name, role, password, username } = req.body;
   try {
+    const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
+    if (!target || target.role === 'superadmin') {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
     if (req.user.role === 'gestor') {
-      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ?").get(id, req.user.establishmentId);
+      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
       if (!u) return res.status(403).json({ error: 'Sem permissão para editar este usuário.' });
     }
     let sql = 'UPDATE users SET name = ?, username = ?';
     const params = [name, username];
     if (password) { sql += ', password = ?'; params.push(bcrypt.hashSync(password, 10)); }
-    if (req.user.role === 'superadmin' && role) { sql += ', role = ?'; params.push(role); }
+    if (req.user.role === 'superadmin' && role) {
+      if (!['gestor', 'operador'].includes(role)) {
+        return res.status(400).json({ error: 'Perfil de usuário inválido.' });
+      }
+      sql += ', role = ?';
+      params.push(role);
+    }
     sql += ' WHERE id = ?';
     params.push(id);
     db.prepare(sql).run(...params);
@@ -248,8 +295,12 @@ app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, (req, res
   const { id } = req.params;
   const { active } = req.body;
   try {
+    const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
+    if (!target || target.role === 'superadmin') {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
     if (req.user.role === 'gestor') {
-      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ?").get(id, req.user.establishmentId);
+      const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
       if (!u) return res.status(403).json({ error: 'Sem permissão.' });
     }
     db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
@@ -262,6 +313,10 @@ app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, (req, res
 app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   try {
+    const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
+    if (!target || target.role === 'superadmin') {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
     if (req.user.role === 'gestor') {
       const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
       if (!u) return res.status(403).json({ error: 'Sem permissão para excluir este usuário.' });
@@ -307,7 +362,10 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
   }
   const id = uuidv4();
   const now = new Date().toISOString();
-  const estId = req.user.role === 'superadmin' ? (req.body.establishmentId || null) : req.user.establishmentId;
+  const estId = getTenantId(req);
+  if (!estId || !ensureEstablishmentExists(estId)) {
+    return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
+  }
   try {
     db.prepare(`INSERT INTO products (id, barcode, name, costPrice, sellPrice, stock, category, establishmentId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral', estId, now, now);
@@ -321,19 +379,20 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const now = new Date().toISOString();
+  const allowedProductFields = ['barcode', 'name', 'costPrice', 'sellPrice', 'stock', 'category'];
   try {
-    // Verificar propriedade
-    if (req.user.role !== 'superadmin') {
-      const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
-      if (!product) return res.status(403).json({ error: 'Produto não encontrado ou sem permissão.' });
-    }
+    const product = canAccessTenantRecord(req, 'products', id);
+    if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
     let sql = 'UPDATE products SET ';
     const params = [];
     for (const [key, value] of Object.entries(updates)) {
-      if (!['id', 'createdAt', 'updatedAt', 'establishmentId'].includes(key)) {
+      if (allowedProductFields.includes(key)) {
         sql += `${key} = ?, `;
         params.push(value);
       }
+    }
+    if (params.length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo valido para atualizar.' });
     }
     sql += `updatedAt = ? WHERE id = ?`;
     params.push(now, id);
@@ -347,28 +406,24 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
 app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   try {
-    if (req.user.role !== 'superadmin') {
-      const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
-      if (!product) return res.status(403).json({ error: 'Produto não encontrado ou sem permissão.' });
-    }
+    const product = canAccessTenantRecord(req, 'products', id);
+    if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
     db.prepare('DELETE FROM products WHERE id = ?').run(id);
-    res.json({ message: 'Produto excluído!' });
+    res.json({ message: 'Produto excluido!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // SEGURANÇA: verificar que o produto pertence ao estabelecimento antes de atualizar estoque
-app.patch('/api/products/:id/stock', authenticateToken, (req, res) => {
+app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, (req, res) => {
   const { id } = req.params;
   const { quantityStep } = req.body;
   const now = new Date().toISOString();
   try {
-    if (req.user.role !== 'superadmin') {
-      const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
-      if (!product) return res.status(403).json({ error: 'Produto não encontrado ou sem permissão.' });
-    }
-    db.prepare(`UPDATE products SET stock = stock + ?, updatedAt = ? WHERE id = ?`).run(quantityStep, now, id);
+    const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
+    if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
+    db.prepare(`UPDATE products SET stock = stock + ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`).run(quantityStep, now, id, req.user.establishmentId);
     res.json({ message: 'Estoque ajustado!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -392,7 +447,7 @@ app.get('/api/sales', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.get('/api/sales/today', authenticateToken, (req, res) => {
+app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
   try {
     const estId = req.user.establishmentId;
     if (!estId) return res.status(403).json({ error: 'Sem estabelecimento vinculado.' });
@@ -413,7 +468,7 @@ app.get('/api/sales/today', authenticateToken, (req, res) => {
   }
 });
 
-app.post('/api/sales', authenticateToken, (req, res) => {
+app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
   const { items, totalAmount, paymentMethod } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Itens da venda são obrigatórios.' });
@@ -423,13 +478,16 @@ app.post('/api/sales', authenticateToken, (req, res) => {
   const saleId = uuidv4();
   const now = new Date().toISOString();
 
-  // SEGURANÇA: verificar que TODOS os produtos pertencem ao estabelecimento
-  if (req.user.role !== 'superadmin' && estId) {
-    for (const item of items) {
-      const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(item.productId, estId);
-      if (!product) {
-        return res.status(403).json({ error: `Produto '${item.name}' não pertence a este estabelecimento.` });
-      }
+  for (const item of items) {
+    const product = db.prepare('SELECT id, stock FROM products WHERE id = ? AND establishmentId = ?').get(item.productId, estId);
+    if (!product) {
+      return res.status(403).json({ error: `Produto '${item.name}' nao pertence a este estabelecimento.` });
+    }
+    if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0) {
+      return res.status(400).json({ error: `Quantidade invalida para '${item.name}'.` });
+    }
+    if (product.stock < Number(item.quantity)) {
+      return res.status(400).json({ error: `Estoque insuficiente para '${item.name}'.` });
     }
   }
 
@@ -437,10 +495,10 @@ app.post('/api/sales', authenticateToken, (req, res) => {
     db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, estId, now);
     const insertItemStmt = db.prepare(`INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice) VALUES (?, ?, ?, ?, ?, ?)`);
-    const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ?`);
+    const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`);
     for (const item of items) {
       insertItemStmt.run(saleId, item.productId, item.name, item.quantity, item.unitPrice, item.totalPrice);
-      updateStockStmt.run(item.quantity, now, item.productId);
+      updateStockStmt.run(item.quantity, now, item.productId, estId);
     }
   });
 
@@ -458,6 +516,20 @@ app.post('/api/sales', authenticateToken, (req, res) => {
 // ==============================
 app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
   try {
+    const requestedPeriod = Number(req.query.periodDays || req.query.period || 30);
+    const periodDays = [30, 90, 365].includes(requestedPeriod) ? requestedPeriod : 30;
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const currentStart = new Date(now - periodDays * dayMs).toISOString();
+    const previousStart = new Date(now - periodDays * 2 * dayMs).toISOString();
+    const groupBy = periodDays > 90 ? "strftime('%Y-%m', paidAt)" : "date(paidAt)";
+
+    const growthPct = (current, previous) => {
+      if (!previous && !current) return 0;
+      if (!previous) return 100;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    };
+
     const total = db.prepare('SELECT COUNT(*) as c FROM establishments').get().c;
     const active = db.prepare("SELECT COUNT(*) as c FROM establishments WHERE subscriptionStatus = 'active'").get().c;
     const overdue = db.prepare("SELECT COUNT(*) as c FROM establishments WHERE subscriptionStatus = 'overdue'").get().c;
@@ -467,7 +539,88 @@ app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
     const monthRevenue = db.prepare(
       "SELECT COALESCE(SUM(amount), 0) as r FROM payments WHERE paidAt IS NOT NULL AND paidAt >= ?"
     ).get(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()).r;
-    res.json({ total, active, overdue, suspended, totalUsers, totalRevenue, monthRevenue });
+    const periodRevenue = db.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as r FROM payments WHERE paidAt IS NOT NULL AND paidAt >= ?"
+    ).get(currentStart).r;
+    const previousPeriodRevenue = db.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as r FROM payments WHERE paidAt IS NOT NULL AND paidAt >= ? AND paidAt < ?"
+    ).get(previousStart, currentStart).r;
+    const newUsers = db.prepare(
+      "SELECT COUNT(*) as c FROM users WHERE role != 'superadmin' AND isDeleted = 0 AND createdAt >= ?"
+    ).get(currentStart).c;
+    const previousNewUsers = db.prepare(
+      "SELECT COUNT(*) as c FROM users WHERE role != 'superadmin' AND isDeleted = 0 AND createdAt >= ? AND createdAt < ?"
+    ).get(previousStart, currentStart).c;
+    const newEstablishments = db.prepare(
+      "SELECT COUNT(*) as c FROM establishments WHERE createdAt >= ?"
+    ).get(currentStart).c;
+    const previousNewEstablishments = db.prepare(
+      "SELECT COUNT(*) as c FROM establishments WHERE createdAt >= ? AND createdAt < ?"
+    ).get(previousStart, currentStart).c;
+    const mrr = db.prepare(
+      "SELECT COALESCE(SUM(monthlyAmount), 0) as r FROM establishments WHERE subscriptionStatus = 'active'"
+    ).get().r;
+    const arpa = active > 0 ? mrr / active : 0;
+
+    const revenueSeries = db.prepare(`
+      SELECT ${groupBy} as label, COALESCE(SUM(amount), 0) as value
+      FROM payments
+      WHERE paidAt IS NOT NULL AND paidAt >= ?
+      GROUP BY label
+      ORDER BY label ASC
+    `).all(currentStart);
+
+    const newUsersSeries = db.prepare(`
+      SELECT ${periodDays > 90 ? "strftime('%Y-%m', createdAt)" : "date(createdAt)"} as label, COUNT(*) as value
+      FROM users
+      WHERE role != 'superadmin' AND isDeleted = 0 AND createdAt >= ?
+      GROUP BY label
+      ORDER BY label ASC
+    `).all(currentStart);
+
+    const usersByEstablishment = db.prepare(`
+      SELECT e.id, e.name, COUNT(u.id) as totalUsers
+      FROM establishments e
+      LEFT JOIN users u ON u.establishmentId = e.id AND u.isDeleted = 0 AND u.role != 'superadmin'
+      GROUP BY e.id
+      ORDER BY totalUsers DESC, e.name ASC
+      LIMIT 10
+    `).all();
+
+    const topRevenueEstablishments = db.prepare(`
+      SELECT e.id, e.name, COALESCE(SUM(p.amount), 0) as revenue
+      FROM establishments e
+      LEFT JOIN payments p ON p.establishmentId = e.id AND p.paidAt IS NOT NULL AND p.paidAt >= ?
+      GROUP BY e.id
+      ORDER BY revenue DESC, e.name ASC
+      LIMIT 10
+    `).all(currentStart);
+
+    res.json({
+      total,
+      active,
+      overdue,
+      suspended,
+      totalUsers,
+      totalRevenue,
+      monthRevenue,
+      periodDays,
+      periodRevenue,
+      previousPeriodRevenue,
+      revenueGrowthPct: growthPct(periodRevenue, previousPeriodRevenue),
+      newUsers,
+      previousNewUsers,
+      userGrowthPct: growthPct(newUsers, previousNewUsers),
+      newEstablishments,
+      previousNewEstablishments,
+      establishmentGrowthPct: growthPct(newEstablishments, previousNewEstablishments),
+      mrr,
+      arpa,
+      revenueSeries,
+      newUsersSeries,
+      usersByEstablishment,
+      topRevenueEstablishments,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -709,7 +862,7 @@ Responda de forma objetiva com dados.`;
   }
 });
 
-app.post('/api/ai/cross-sell', authenticateToken, async (req, res) => {
+app.post('/api/ai/cross-sell', authenticateToken, isTenantUser, async (req, res) => {
   if (!geminiModel) return res.json({ suggestion: null, productName: null });
   const { cartItems } = req.body;
   if (!cartItems || cartItems.length === 0) return res.json({ suggestion: null, productName: null });
@@ -757,7 +910,11 @@ app.get('/api/ai/suggestions', authenticateToken, isGestorOrAbove, (req, res) =>
 
 app.delete('/api/ai/suggestions/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
-    db.prepare('DELETE FROM ai_suggestions WHERE id = ?').run(req.params.id);
+    if (req.user.role === 'superadmin') {
+      db.prepare('DELETE FROM ai_suggestions WHERE id = ?').run(req.params.id);
+    } else {
+      db.prepare('DELETE FROM ai_suggestions WHERE id = ? AND establishmentId = ?').run(req.params.id, req.user.establishmentId);
+    }
     res.json({ message: 'Sugestão removida!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
