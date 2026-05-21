@@ -344,6 +344,238 @@
   padding: 0.75rem 0;
 }
 
+/* ---- Business Insights ---- */
+.business-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.business-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  min-width: 0;
+}
+
+.business-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.business-section-header.compact {
+  margin-bottom: 0.75rem;
+}
+
+.business-section-header h3 {
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 0.15rem;
+}
+
+.business-section-header p,
+.business-products p {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.business-select {
+  max-width: 320px;
+}
+
+.business-detail {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.3fr) minmax(240px, 0.9fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.business-score-card,
+.business-products {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.9rem;
+}
+
+.business-score-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.business-score-card h4,
+.business-products h4 {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  margin-bottom: 0.2rem;
+}
+
+.business-score-card p {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  margin-bottom: 0.45rem;
+}
+
+.health-score {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.health-score.small {
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 0.82rem;
+  border-radius: 0.45rem;
+}
+
+.health-score.strong { background: #dcfce7; color: #15803d; }
+.health-score.medium { background: #fef3c7; color: #92400e; }
+.health-score.weak { background: #fee2e2; color: #991b1b; }
+[data-theme="dark"] .health-score.strong { background: rgba(21,128,61,0.2); color: #4ade80; }
+[data-theme="dark"] .health-score.medium { background: rgba(146,64,14,0.2); color: #fbbf24; }
+[data-theme="dark"] .health-score.weak { background: rgba(153,27,27,0.2); color: #f87171; }
+
+.business-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+}
+
+.business-metrics > div {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.business-metrics span,
+.business-metrics small {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.business-metrics strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 1rem;
+  margin: 0.22rem 0;
+}
+
+.business-products {
+  min-width: 0;
+}
+
+.ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.ranking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.ranking-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-main);
+}
+
+.ranking-position {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.ranking-row strong,
+.ranking-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-row strong {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.ranking-row small {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  margin-top: 0.12rem;
+}
+
+.business-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.business-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.business-table th {
+  text-align: left;
+  padding: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-main);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.business-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.business-table td:first-child strong,
+.business-table td:first-child small {
+  display: block;
+}
+
+.business-table td:first-child small {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  margin-top: 0.1rem;
+}
+
 /* ---- Establishment Grid ---- */
 .est-grid {
   display: grid;
@@ -675,6 +907,11 @@
   .sa-stats { grid-template-columns: repeat(2, 1fr); }
   .est-grid { grid-template-columns: 1fr; }
   .platform-grid { grid-template-columns: 1fr; }
+  .business-detail,
+  .ranking-grid { grid-template-columns: 1fr; }
+  .business-metrics { grid-template-columns: repeat(2, 1fr); }
+  .business-section-header { flex-direction: column; }
+  .business-select { max-width: none; width: 100%; }
   .platform-panel-wide { grid-row: auto; }
   .metric-bar-row { align-items: flex-start; flex-direction: column; gap: 0.3rem; }
   .metric-bar-row span,

@@ -4,7 +4,8 @@ import {
   Plus, Edit2, Trash2, RefreshCw, Mail, Phone, Calendar,
   Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
   CreditCard, Receipt, Banknote, X, Users, UserPlus,
-  BarChart3, ArrowUpRight, ArrowDownRight, Store
+  BarChart3, ArrowUpRight, ArrowDownRight, Store, Activity,
+  Target, PackageSearch
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import type { Establishment } from '../types';
@@ -55,6 +56,45 @@ interface MetricPoint { label: string; value: number; }
 interface EstablishmentUserStat { id: string; name: string; totalUsers: number; }
 interface EstablishmentRevenueStat { id: string; name: string; revenue: number; }
 
+interface BusinessInsight {
+  id: string;
+  name: string;
+  ownerName?: string;
+  plan: string;
+  subscriptionStatus: string;
+  monthlyAmount: number;
+  periodRevenue: number;
+  previousPeriodRevenue: number;
+  revenueGrowthPct: number;
+  salesCount: number;
+  previousSalesCount: number;
+  salesGrowthPct: number;
+  averageTicket: number;
+  productCount: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  userCount: number;
+  activeUsers: number;
+  lastSaleAt?: string | null;
+  healthScore: number;
+  topProducts: { name: string; quantity: number; revenue: number }[];
+}
+
+interface BusinessInsights {
+  periodDays: number;
+  summary: {
+    totalBusinesses: number;
+    activeBusinesses: number;
+    totalRevenue: number;
+    totalSales: number;
+    averageTicket: number;
+    lowStockBusinesses: number;
+  };
+  businesses: BusinessInsight[];
+  topFive: BusinessInsight[];
+  bottomFive: BusinessInsight[];
+}
+
 interface EstUser { id: string; username: string; name: string; role: string; active: number; }
 
 interface Payment {
@@ -69,7 +109,7 @@ interface ManagedEstablishment extends Establishment {
   lastPayment?: Pick<Payment, 'paidAt' | 'amount'>;
 }
 
-type Tab = 'platform' | 'establishments' | 'billing';
+type Tab = 'platform' | 'businesses' | 'establishments' | 'billing';
 type PeriodDays = 30 | 90 | 365;
 type Plan = Establishment['plan'];
 type SubscriptionStatus = Establishment['subscriptionStatus'];
@@ -100,6 +140,8 @@ export default function SuperAdmin() {
   const [periodDays, setPeriodDays] = useState<PeriodDays>(30);
   const [establishments, setEstablishments] = useState<ManagedEstablishment[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [businessInsights, setBusinessInsights] = useState<BusinessInsights | null>(null);
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
   // Modals
@@ -126,12 +168,18 @@ export default function SuperAdmin() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [estRes, statsRes] = await Promise.all([
+      const [estRes, statsRes, insightsRes] = await Promise.all([
         fetch(`${API}/admin/establishments`, { headers: getHeaders() }),
         fetch(`${API}/admin/stats?periodDays=${periodDays}`, { headers: getHeaders() }),
+        fetch(`${API}/admin/business-insights?periodDays=${periodDays}`, { headers: getHeaders() }),
       ]);
       if (estRes.ok) setEstablishments(await estRes.json());
       if (statsRes.ok) setStats(await statsRes.json());
+      if (insightsRes.ok) {
+        const data: BusinessInsights = await insightsRes.json();
+        setBusinessInsights(data);
+        setSelectedBusinessId(current => current || data.businesses[0]?.id || '');
+      }
     } catch (e) { console.error(e); }
     setLoading(false);
   }, [periodDays]);
@@ -324,6 +372,20 @@ export default function SuperAdmin() {
     },
   ] : [];
 
+  const selectedBusiness = businessInsights?.businesses.find(b => b.id === selectedBusinessId) || businessInsights?.businesses[0];
+  const businessSummaryCards = businessInsights ? [
+    { label: 'Negocios ativos', value: businessInsights.summary.activeBusinesses, note: `${businessInsights.summary.totalBusinesses} cadastrados`, icon: <Store size={18} /> },
+    { label: `Vendas (${periodLabel})`, value: businessInsights.summary.totalSales, note: formatCurrency(businessInsights.summary.totalRevenue), icon: <Receipt size={18} /> },
+    { label: 'Ticket medio', value: formatCurrency(businessInsights.summary.averageTicket), note: 'Media da base operacional', icon: <Target size={18} /> },
+    { label: 'Estoque em atencao', value: businessInsights.summary.lowStockBusinesses, note: 'Negocios com alerta de estoque', icon: <PackageSearch size={18} /> },
+  ] : [];
+
+  const getScoreClass = (score: number) => {
+    if (score >= 70) return 'strong';
+    if (score >= 40) return 'medium';
+    return 'weak';
+  };
+
   return (
     <div className="page-container superadmin-page">
 
@@ -356,6 +418,9 @@ export default function SuperAdmin() {
       <div className="sa-tabs">
         <button className={`sa-tab ${tab === 'platform' ? 'active' : ''}`} onClick={() => setTab('platform')}>
           <BarChart3 size={16} /> Plataforma
+        </button>
+        <button className={`sa-tab ${tab === 'businesses' ? 'active' : ''}`} onClick={() => setTab('businesses')}>
+          <Activity size={16} /> Negocios
         </button>
         <button className={`sa-tab ${tab === 'establishments' ? 'active' : ''}`} onClick={() => setTab('establishments')}>
           <Building2 size={16} /> Estabelecimentos
@@ -486,6 +551,180 @@ export default function SuperAdmin() {
                 </div>
               </section>
             </div>
+          </div>
+        )
+      )}
+
+      {/* ===== TAB: NEGOCIOS ===== */}
+      {tab === 'businesses' && (
+        loading ? (
+          <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /><p>Carregando...</p></div>
+        ) : businessInsights && (
+          <div className="business-dashboard">
+            <div className="platform-toolbar">
+              <div>
+                <h2>Saude dos negocios</h2>
+                <p>Uso operacional, vendas, estoque e crescimento dos estabelecimentos.</p>
+              </div>
+              <div className="period-segment" aria-label="Periodo de analise dos negocios">
+                {[30, 90, 365].map(days => (
+                  <button
+                    key={days}
+                    className={periodDays === days ? 'active' : ''}
+                    onClick={() => setPeriodDays(days as PeriodDays)}
+                  >
+                    {days === 365 ? '12m' : `${days}d`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="platform-kpis">
+              {businessSummaryCards.map(card => (
+                <div className="platform-kpi" key={card.label}>
+                  <div className="platform-kpi-top">
+                    <span className="platform-kpi-icon">{card.icon}</span>
+                  </div>
+                  <span className="platform-kpi-label">{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <small>{card.note}</small>
+                </div>
+              ))}
+            </div>
+
+            <section className="business-section">
+              <div className="business-section-header">
+                <div>
+                  <h3>Analisar um negocio</h3>
+                  <p>Escolha um estabelecimento para ver os principais sinais operacionais.</p>
+                </div>
+                <select className="form-control business-select" value={selectedBusiness?.id || ''} onChange={e => setSelectedBusinessId(e.target.value)}>
+                  {businessInsights.businesses.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+
+              {selectedBusiness && (
+                <div className="business-detail">
+                  <div className="business-score-card">
+                    <span className={`health-score ${getScoreClass(selectedBusiness.healthScore)}`}>{selectedBusiness.healthScore}</span>
+                    <div>
+                      <h4>{selectedBusiness.name}</h4>
+                      <p>{selectedBusiness.ownerName || 'Sem responsavel'} · {PLAN_LABELS[selectedBusiness.plan] || selectedBusiness.plan}</p>
+                      <span className={`badge badge-sub-${selectedBusiness.subscriptionStatus}`}>
+                        {STATUS_LABELS[selectedBusiness.subscriptionStatus] || selectedBusiness.subscriptionStatus}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="business-metrics">
+                    <div><span>Faturamento</span><strong>{formatCurrency(selectedBusiness.periodRevenue)}</strong>{renderGrowth(selectedBusiness.revenueGrowthPct)}</div>
+                    <div><span>Vendas</span><strong>{selectedBusiness.salesCount}</strong>{renderGrowth(selectedBusiness.salesGrowthPct)}</div>
+                    <div><span>Ticket medio</span><strong>{formatCurrency(selectedBusiness.averageTicket)}</strong></div>
+                    <div><span>Produtos</span><strong>{selectedBusiness.productCount}</strong><small>{selectedBusiness.lowStockCount} em estoque baixo</small></div>
+                    <div><span>Usuarios ativos</span><strong>{selectedBusiness.activeUsers}</strong><small>{selectedBusiness.userCount} cadastrados</small></div>
+                    <div><span>Ultima venda</span><strong>{formatDate(selectedBusiness.lastSaleAt || undefined)}</strong></div>
+                  </div>
+                  <div className="business-products">
+                    <h4>Produtos mais vendidos</h4>
+                    {selectedBusiness.topProducts.length === 0 ? (
+                      <p>Nenhum produto vendido neste periodo.</p>
+                    ) : selectedBusiness.topProducts.map(product => (
+                      <div className="platform-list-row" key={product.name}>
+                        <span>{product.name}</span>
+                        <strong>{product.quantity} un · {formatCurrency(product.revenue)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <div className="ranking-grid">
+              <section className="business-section">
+                <div className="business-section-header compact">
+                  <div>
+                    <h3>5 melhores</h3>
+                    <p>Maior pontuacao de saude operacional.</p>
+                  </div>
+                </div>
+                <div className="ranking-list">
+                  {businessInsights.topFive.map((item, index) => (
+                    <div className="ranking-row" key={item.id}>
+                      <span className="ranking-position">{index + 1}</span>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <small>{formatCurrency(item.periodRevenue)} · {item.salesCount} vendas</small>
+                      </div>
+                      <span className={`health-score small ${getScoreClass(item.healthScore)}`}>{item.healthScore}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="business-section">
+                <div className="business-section-header compact">
+                  <div>
+                    <h3>5 em atencao</h3>
+                    <p>Menor pontuacao no periodo selecionado.</p>
+                  </div>
+                </div>
+                <div className="ranking-list">
+                  {businessInsights.bottomFive.map((item, index) => (
+                    <div className="ranking-row" key={item.id}>
+                      <span className="ranking-position">{index + 1}</span>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <small>{formatCurrency(item.periodRevenue)} · {item.lowStockCount} alertas estoque</small>
+                      </div>
+                      <span className={`health-score small ${getScoreClass(item.healthScore)}`}>{item.healthScore}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <section className="business-section">
+              <div className="business-section-header compact">
+                <div>
+                  <h3>Comparacao geral</h3>
+                  <p>Todos os negocios lado a lado no mesmo periodo.</p>
+                </div>
+              </div>
+              <div className="business-table-wrap">
+                <table className="business-table">
+                  <thead>
+                    <tr>
+                      <th>Negocio</th>
+                      <th>Score</th>
+                      <th>Faturamento</th>
+                      <th>Cresc.</th>
+                      <th>Vendas</th>
+                      <th>Ticket</th>
+                      <th>Usuarios</th>
+                      <th>Estoque</th>
+                      <th>Ultima venda</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {businessInsights.businesses.map(item => (
+                      <tr key={item.id}>
+                        <td>
+                          <strong>{item.name}</strong>
+                          <small>{STATUS_LABELS[item.subscriptionStatus] || item.subscriptionStatus}</small>
+                        </td>
+                        <td><span className={`health-score small ${getScoreClass(item.healthScore)}`}>{item.healthScore}</span></td>
+                        <td>{formatCurrency(item.periodRevenue)}</td>
+                        <td>{renderGrowth(item.revenueGrowthPct)}</td>
+                        <td>{item.salesCount}</td>
+                        <td>{formatCurrency(item.averageTicket)}</td>
+                        <td>{item.activeUsers}/{item.userCount}</td>
+                        <td>{item.lowStockCount} baixo · {item.outOfStockCount} zerado</td>
+                        <td>{formatDate(item.lastSaleAt || undefined)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         )
       )}

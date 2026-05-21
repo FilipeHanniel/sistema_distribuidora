@@ -1,27 +1,52 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, type FormEvent } from 'react';
 import { Search, ShoppingCart, Plus, Minus, Trash2, CheckCircle, CreditCard, Banknote, QrCode, Scan, Tag, X } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
 import { useAuthStore } from '../store/useAuthStore';
+import { apiRequest } from '../lib/api';
 import CrossSellPopup from '../components/CrossSellPopup';
-import type { Product, SaleItem } from '../types';
+import Modal from '../components/Modal';
+import type { PixAccount, PixTransaction, Product, SaleItem } from '../types';
 import './Sales.css';
 
 export default function Sales() {
   const [searchTerm, setSearchTerm] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
   const [barcodeError, setBarcodeError] = useState('');
+  const [quickProductOpen, setQuickProductOpen] = useState(false);
+  const [quickProduct, setQuickProduct] = useState({
+    barcode: '',
+    name: '',
+    costPrice: '',
+    sellPrice: '',
+    stock: '1',
+    category: 'Geral',
+  });
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'money' | 'card' | 'pix'>('money');
+  const [pixAccounts, setPixAccounts] = useState<PixAccount[]>([]);
+  const [selectedPixAccountId, setSelectedPixAccountId] = useState('');
+  const [pixTransaction, setPixTransaction] = useState<PixTransaction | null>(null);
+  const [pixWaiting, setPixWaiting] = useState(false);
   const [crossSell, setCrossSell] = useState<{ productName: string; suggestion: string } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const crossSellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const { products } = useInventoryStore();
-  const { addSale } = useSalesStore();
+  const { products, addProduct } = useInventoryStore();
+  const { addSale, createPixPayment, checkPixPayment } = useSalesStore();
   const { token } = useAuthStore();
+
+  useEffect(() => {
+    apiRequest<PixAccount[]>('/pix/accounts')
+      .then(accounts => {
+        const active = accounts.filter(a => a.active);
+        setPixAccounts(active);
+        setSelectedPixAccountId(active.find(a => a.isDefault)?.id || active[0]?.id || '');
+      })
+      .catch(() => setPixAccounts([]));
+  }, []);
 
   const categories = useMemo(() => {
     const cats = Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort();
@@ -114,6 +139,15 @@ export default function Sales() {
       }
     } else {
       setBarcodeError(`Código "${code}" não encontrado.`);
+      setQuickProduct({
+        barcode: code,
+        name: '',
+        costPrice: '',
+        sellPrice: '',
+        stock: '1',
+        category: 'Geral',
+      });
+      setQuickProductOpen(true);
     }
     setBarcodeInput('');
     setTimeout(() => setBarcodeError(''), 3000);
@@ -141,10 +175,57 @@ export default function Sales() {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (paymentMethod === 'pix') {
+      const transaction = await createPixPayment(cart, cartTotal, selectedPixAccountId || undefined);
+      if (transaction) {
+        setPixTransaction(transaction);
+        setPixWaiting(true);
+      }
+      return;
+    }
     await addSale(cart, cartTotal, paymentMethod);
     setCart([]);
     setSearchTerm('');
     setPaymentMethod('money');
+    barcodeRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!pixWaiting || !pixTransaction?.id) return;
+    const timer = window.setInterval(async () => {
+      const updated = await checkPixPayment(pixTransaction.id);
+      if (!updated) return;
+      setPixTransaction(updated);
+      if (updated.status === 'paid') {
+        window.clearInterval(timer);
+        setPixWaiting(false);
+        setCart([]);
+        setSearchTerm('');
+        setPaymentMethod('money');
+        setPixTransaction(null);
+        barcodeRef.current?.focus();
+      }
+      if (updated.status === 'cancelled' || updated.status === 'expired') {
+        window.clearInterval(timer);
+        setPixWaiting(false);
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [pixWaiting, pixTransaction?.id, checkPixPayment]);
+
+  const handleQuickProductSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    await addProduct({
+      barcode: quickProduct.barcode,
+      name: quickProduct.name,
+      costPrice: Number(quickProduct.costPrice) || 0,
+      sellPrice: Number(quickProduct.sellPrice) || 0,
+      stock: Number(quickProduct.stock) || 0,
+      category: quickProduct.category || 'Geral',
+    });
+    setQuickProductOpen(false);
+    setBarcodeError('Produto cadastrado. Escaneie novamente para adicionar ao carrinho.');
+    setTimeout(() => setBarcodeError(''), 3500);
     barcodeRef.current?.focus();
   };
 
@@ -318,6 +399,18 @@ export default function Sales() {
                     );
                   })}
                 </div>
+                {paymentMethod === 'pix' && (
+                  <div className="pix-account-select">
+                    <label>Conta Pix recebedora</label>
+                    <select value={selectedPixAccountId} onChange={e => setSelectedPixAccountId(e.target.value)}>
+                      {pixAccounts.length === 0 ? (
+                        <option value="">Nenhuma conta Pix ativa</option>
+                      ) : pixAccounts.map(account => (
+                        <option key={account.id} value={account.id}>{account.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
 
@@ -328,7 +421,7 @@ export default function Sales() {
 
             <button
               className="btn-checkout"
-              disabled={cart.length === 0}
+              disabled={cart.length === 0 || (paymentMethod === 'pix' && !selectedPixAccountId)}
               onClick={handleCheckout}
             >
               <CheckCircle size={20} />
@@ -345,6 +438,84 @@ export default function Sales() {
           onClose={() => setCrossSell(null)}
         />
       )}
+
+      <Modal isOpen={!!pixTransaction} onClose={() => !pixWaiting && setPixTransaction(null)} title="Pagamento Pix">
+        {pixTransaction && (
+          <div className="pix-payment-modal">
+            <div className="pix-payment-status">
+              <QrCode size={22} />
+              <div>
+                <strong>{pixTransaction.status === 'paid' ? 'Pagamento confirmado' : 'Aguardando pagamento'}</strong>
+                <span>{formatCurrency(pixTransaction.amount)}</span>
+              </div>
+            </div>
+
+            {pixTransaction.qrCodeBase64 ? (
+              <img className="pix-qr-image" src={`data:image/png;base64,${pixTransaction.qrCodeBase64}`} alt="QR Code Pix" />
+            ) : (
+              <div className="pix-qr-placeholder">
+                <QrCode size={56} />
+                <span>Use o copia e cola abaixo</span>
+              </div>
+            )}
+
+            {pixTransaction.qrCode && (
+              <div className="pix-copy-code">
+                <label>Pix copia e cola</label>
+                <textarea readOnly value={pixTransaction.qrCode} />
+                <button className="btn btn-secondary" onClick={() => navigator.clipboard?.writeText(pixTransaction.qrCode || '')}>
+                  Copiar codigo
+                </button>
+              </div>
+            )}
+
+            {pixTransaction.ticketUrl && (
+              <a className="pix-ticket-link" href={pixTransaction.ticketUrl} target="_blank" rel="noreferrer">Abrir pagina do Pix</a>
+            )}
+
+            <div className="pix-waiting-note">
+              {pixWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A cobranca nao esta mais em consulta automatica.'}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={quickProductOpen} onClose={() => setQuickProductOpen(false)} title="Cadastro rapido de produto">
+        <form onSubmit={handleQuickProductSubmit}>
+          <div className="form-group">
+            <label>Codigo de barras</label>
+            <input className="form-control" value={quickProduct.barcode} onChange={e => setQuickProduct(p => ({ ...p, barcode: e.target.value }))} required />
+          </div>
+          <div className="form-group">
+            <label>Nome do produto *</label>
+            <input className="form-control" value={quickProduct.name} onChange={e => setQuickProduct(p => ({ ...p, name: e.target.value }))} required autoFocus />
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Custo</label>
+              <input className="form-control" type="number" step="0.01" value={quickProduct.costPrice} onChange={e => setQuickProduct(p => ({ ...p, costPrice: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Preco de venda *</label>
+              <input className="form-control" type="number" step="0.01" value={quickProduct.sellPrice} onChange={e => setQuickProduct(p => ({ ...p, sellPrice: e.target.value }))} required />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Estoque inicial</label>
+              <input className="form-control" type="number" value={quickProduct.stock} onChange={e => setQuickProduct(p => ({ ...p, stock: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Categoria</label>
+              <input className="form-control" value={quickProduct.category} onChange={e => setQuickProduct(p => ({ ...p, category: e.target.value }))} />
+            </div>
+          </div>
+          <div className="form-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => setQuickProductOpen(false)}>Cancelar</button>
+            <button type="submit" className="btn btn-primary">Cadastrar Produto</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

@@ -104,6 +104,48 @@ const initDB = () => {
     )
   `).run();
 
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS pix_accounts (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      pixKey TEXT,
+      credentials TEXT,
+      active INTEGER DEFAULT 1,
+      isDefault INTEGER DEFAULT 0,
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS payment_transactions (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      pixAccountId TEXT,
+      provider TEXT NOT NULL,
+      providerTransactionId TEXT,
+      saleId TEXT,
+      status TEXT DEFAULT 'pending',
+      amount REAL NOT NULL,
+      paymentMethod TEXT DEFAULT 'pix',
+      qrCode TEXT,
+      qrCodeBase64 TEXT,
+      ticketUrl TEXT,
+      payload TEXT,
+      error TEXT,
+      expiresAt TEXT,
+      paidAt TEXT,
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id),
+      FOREIGN KEY (pixAccountId) REFERENCES pix_accounts(id),
+      FOREIGN KEY (saleId) REFERENCES sales(id)
+    )
+  `).run();
+
   // ============================================================
   // MIGRAÇÕES
   // ============================================================
@@ -118,6 +160,7 @@ const initDB = () => {
     'ALTER TABLE sales ADD COLUMN establishmentId TEXT',
     'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
     'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
+    'ALTER TABLE payment_transactions ADD COLUMN payload TEXT',
   ];
   for (const sql of migrations) {
     try { db.prepare(sql).run(); } catch (e) {}
@@ -130,6 +173,8 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(saleId)',
     'CREATE INDEX IF NOT EXISTS idx_ai_suggestions_establishment ON ai_suggestions(establishmentId, updatedAt)',
     'CREATE INDEX IF NOT EXISTS idx_payments_establishment ON payments(establishmentId, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_pix_accounts_establishment ON pix_accounts(establishmentId, active, isDefault)',
+    'CREATE INDEX IF NOT EXISTS idx_payment_transactions_establishment ON payment_transactions(establishmentId, status, createdAt)',
   ];
   for (const sql of indexes) {
     try { db.prepare(sql).run(); } catch (e) {}

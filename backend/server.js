@@ -1,12 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./database');
 const { addOneMonth } = require('./database');
+const { PROVIDERS, getPixProvider, makeProviderReference } = require('./pixProviders');
 
 const app = express();
 
@@ -134,6 +136,81 @@ const ensureEstablishmentExists = (establishmentId) => {
 const canAccessTenantRecord = (req, table, id) => {
   if (req.user.role === 'superadmin') return db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(id);
   return db.prepare(`SELECT id FROM ${table} WHERE id = ? AND establishmentId = ?`).get(id, req.user.establishmentId);
+};
+
+const credentialKey = crypto.createHash('sha256').update(JWT_SECRET).digest();
+const encodeCredentials = (credentials = {}) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', credentialKey, iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(credentials), 'utf8'), cipher.final()]);
+  return [
+    'v1',
+    iv.toString('base64'),
+    cipher.getAuthTag().toString('base64'),
+    encrypted.toString('base64'),
+  ].join(':');
+};
+const decodeCredentials = (encoded) => {
+  if (!encoded) return {};
+  try {
+    if (encoded.startsWith('v1:')) {
+      const [, iv, tag, encrypted] = encoded.split(':');
+      const decipher = crypto.createDecipheriv('aes-256-gcm', credentialKey, Buffer.from(iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(tag, 'base64'));
+      const decrypted = Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]);
+      return JSON.parse(decrypted.toString('utf8'));
+    }
+    return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  } catch {
+    return {};
+  }
+};
+
+const sanitizePixAccount = (account) => {
+  if (!account) return account;
+  return {
+    id: account.id,
+    establishmentId: account.establishmentId,
+    name: account.name,
+    provider: account.provider,
+    pixKey: account.pixKey,
+    active: account.active,
+    isDefault: account.isDefault,
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+  };
+};
+
+const validateSaleItemsForTenant = (items, estId) => {
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    throw new Error('Itens da venda sao obrigatorios.');
+  }
+  for (const item of items) {
+    const product = db.prepare('SELECT id, stock FROM products WHERE id = ? AND establishmentId = ?').get(item.productId, estId);
+    if (!product) throw new Error(`Produto '${item.name}' nao pertence a este estabelecimento.`);
+    if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0) {
+      throw new Error(`Quantidade invalida para '${item.name}'.`);
+    }
+    if (product.stock < Number(item.quantity)) {
+      throw new Error(`Estoque insuficiente para '${item.name}'.`);
+    }
+  }
+};
+
+const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId = uuidv4()) => {
+  const now = new Date().toISOString();
+  const insertSale = db.transaction(() => {
+    db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, estId, now);
+    const insertItemStmt = db.prepare(`INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice) VALUES (?, ?, ?, ?, ?, ?)`);
+    const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`);
+    for (const item of items) {
+      insertItemStmt.run(saleId, item.productId, item.name, item.quantity, item.unitPrice, item.totalPrice);
+      updateStockStmt.run(item.quantity, now, item.productId, estId);
+    }
+  });
+  insertSale();
+  return saleId;
 };
 
 // ==============================
@@ -468,6 +545,94 @@ app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
   }
 });
 
+app.get('/api/pix/providers', authenticateToken, isGestorOrAbove, (req, res) => {
+  res.json(PROVIDERS);
+});
+
+app.get('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    const estId = getTenantId(req);
+    if (!estId) return res.status(400).json({ error: 'Estabelecimento obrigatorio.' });
+    const accounts = db.prepare(
+      'SELECT * FROM pix_accounts WHERE establishmentId = ? ORDER BY isDefault DESC, createdAt DESC'
+    ).all(estId);
+    res.json(accounts.map(sanitizePixAccount));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    const estId = getTenantId(req);
+    if (!estId || !ensureEstablishmentExists(estId)) {
+      return res.status(400).json({ error: 'Estabelecimento obrigatorio ou invalido.' });
+    }
+
+    const { name, provider, pixKey, credentials, isDefault } = req.body;
+    if (!name || !provider) return res.status(400).json({ error: 'Nome e provider sao obrigatorios.' });
+    if (!PROVIDERS[provider]) return res.status(400).json({ error: 'Provider Pix invalido.' });
+
+    const existingCount = db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ?').get(estId).c;
+    if (existingCount >= 3) return res.status(400).json({ error: 'Limite inicial de 3 contas Pix atingido.' });
+
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    const shouldDefault = isDefault || existingCount === 0;
+
+    const createAccount = db.transaction(() => {
+      if (shouldDefault) db.prepare('UPDATE pix_accounts SET isDefault = 0 WHERE establishmentId = ?').run(estId);
+      db.prepare(`
+        INSERT INTO pix_accounts (id, establishmentId, name, provider, pixKey, credentials, active, isDefault, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+      `).run(id, estId, name, provider, pixKey || null, encodeCredentials(credentials || {}), shouldDefault ? 1 : 0, now, now);
+    });
+    createAccount();
+
+    res.status(201).json(sanitizePixAccount(db.prepare('SELECT * FROM pix_accounts WHERE id = ?').get(id)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    const estId = req.user.role === 'superadmin' ? req.body.establishmentId : req.user.establishmentId;
+    const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
+    if (!account) return res.status(404).json({ error: 'Conta Pix nao encontrada.' });
+
+    const { name, provider, pixKey, credentials, active, isDefault } = req.body;
+    if (!name || !provider || !PROVIDERS[provider]) return res.status(400).json({ error: 'Dados da conta Pix invalidos.' });
+    const now = new Date().toISOString();
+
+    const updateAccount = db.transaction(() => {
+      if (isDefault) db.prepare('UPDATE pix_accounts SET isDefault = 0 WHERE establishmentId = ?').run(estId);
+      db.prepare(`
+        UPDATE pix_accounts
+        SET name = ?, provider = ?, pixKey = ?, credentials = ?, active = ?, isDefault = ?, updatedAt = ?
+        WHERE id = ? AND establishmentId = ?
+      `).run(name, provider, pixKey || null, encodeCredentials(credentials || {}), active ? 1 : 0, isDefault ? 1 : 0, now, req.params.id, estId);
+    });
+    updateAccount();
+
+    res.json(sanitizePixAccount(db.prepare('SELECT * FROM pix_accounts WHERE id = ?').get(req.params.id)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    const estId = req.user.role === 'superadmin' ? req.query.establishmentId : req.user.establishmentId;
+    const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
+    if (!account) return res.status(404).json({ error: 'Conta Pix nao encontrada.' });
+    db.prepare('DELETE FROM pix_accounts WHERE id = ? AND establishmentId = ?').run(req.params.id, estId);
+    res.json({ message: 'Conta Pix removida.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
   const { items, totalAmount, paymentMethod } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -476,37 +641,130 @@ app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
 
   const estId = req.user.establishmentId;
   const saleId = uuidv4();
-  const now = new Date().toISOString();
-
-  for (const item of items) {
-    const product = db.prepare('SELECT id, stock FROM products WHERE id = ? AND establishmentId = ?').get(item.productId, estId);
-    if (!product) {
-      return res.status(403).json({ error: `Produto '${item.name}' nao pertence a este estabelecimento.` });
-    }
-    if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0) {
-      return res.status(400).json({ error: `Quantidade invalida para '${item.name}'.` });
-    }
-    if (product.stock < Number(item.quantity)) {
-      return res.status(400).json({ error: `Estoque insuficiente para '${item.name}'.` });
-    }
-  }
-
-  const insertSale = db.transaction((items, totalAmount, paymentMethod, userId) => {
-    db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, estId, now);
-    const insertItemStmt = db.prepare(`INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice) VALUES (?, ?, ?, ?, ?, ?)`);
-    const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`);
-    for (const item of items) {
-      insertItemStmt.run(saleId, item.productId, item.name, item.quantity, item.unitPrice, item.totalPrice);
-      updateStockStmt.run(item.quantity, now, item.productId, estId);
-    }
-  });
 
   try {
-    insertSale(items, totalAmount, paymentMethod, req.user.id);
+    validateSaleItemsForTenant(items, estId);
+    createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
     res.status(201).json({ id: saleId, message: 'Venda finalizada com sucesso!' });
   } catch (err) {
     console.error('[Sale Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const { items, totalAmount, pixAccountId } = req.body;
+    const estId = req.user.establishmentId;
+    validateSaleItemsForTenant(items, estId);
+
+    const account = pixAccountId
+      ? db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ? AND active = 1').get(pixAccountId, estId)
+      : db.prepare('SELECT * FROM pix_accounts WHERE establishmentId = ? AND active = 1 ORDER BY isDefault DESC, createdAt DESC LIMIT 1').get(estId);
+    if (!account) return res.status(400).json({ error: 'Nenhuma conta Pix ativa configurada.' });
+    if (!PROVIDERS[account.provider]?.implemented) {
+      return res.status(400).json({ error: 'Provider Pix ainda nao implementado para cobranca real.' });
+    }
+
+    const transactionId = uuidv4();
+    const referenceId = makeProviderReference();
+    const provider = getPixProvider(account.provider);
+    const charge = await provider.createCharge({
+      amount: totalAmount,
+      referenceId,
+      credentials: decodeCredentials(account.credentials),
+      description: `Venda PDV ${transactionId}`,
+    });
+    const createdAt = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO payment_transactions (
+        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
+        qrCode, qrCodeBase64, ticketUrl, payload, expiresAt, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pix', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      transactionId,
+      estId,
+      account.id,
+      account.provider,
+      charge.providerTransactionId,
+      charge.status,
+      totalAmount,
+      charge.qrCode || '',
+      charge.qrCodeBase64 || '',
+      charge.ticketUrl || '',
+      JSON.stringify({ items, providerPayload: charge.payload || null }),
+      charge.expiresAt || null,
+      createdAt,
+      createdAt
+    );
+
+    res.status(201).json({
+      id: transactionId,
+      status: charge.status,
+      amount: totalAmount,
+      qrCode: charge.qrCode || '',
+      qrCodeBase64: charge.qrCodeBase64 || '',
+      ticketUrl: charge.ticketUrl || '',
+      expiresAt: charge.expiresAt || null,
+      pixAccount: sanitizePixAccount(account),
+    });
+  } catch (err) {
+    console.error('[Pix Create Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
+    if (!transaction) return res.status(404).json({ error: 'Transacao Pix nao encontrada.' });
+
+    let status = transaction.status;
+    let paidAt = transaction.paidAt;
+    let saleId = transaction.saleId;
+
+    if (status === 'pending') {
+      const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
+      if (!account) return res.status(404).json({ error: 'Conta Pix da transacao nao encontrada.' });
+      const statusResult = await getPixProvider(account.provider).getStatus({
+        transaction,
+        credentials: decodeCredentials(account.credentials),
+      });
+      status = statusResult.status;
+      paidAt = statusResult.paidAt || paidAt;
+
+      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
+        .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
+          ...JSON.parse(transaction.payload || '{}'),
+          latestProviderPayload: statusResult.payload || null,
+        }), transaction.id);
+    }
+
+    if (status === 'paid' && !saleId) {
+      const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+      const stored = JSON.parse(fresh.payload || '{}');
+      const storedItems = stored.items || [];
+      validateSaleItemsForTenant(storedItems, estId);
+      saleId = createPaidSale(storedItems, fresh.amount, 'pix', req.user.id, estId);
+      db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
+        .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+    }
+
+    res.json({
+      id: transaction.id,
+      status,
+      saleId,
+      paidAt,
+      amount: transaction.amount,
+      qrCode: transaction.qrCode,
+      qrCodeBase64: transaction.qrCodeBase64,
+      ticketUrl: transaction.ticketUrl,
+      expiresAt: transaction.expiresAt,
+    });
+  } catch (err) {
+    console.error('[Pix Status Error]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -620,6 +878,130 @@ app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
       newUsersSeries,
       usersByEstablishment,
       topRevenueEstablishments,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/business-insights', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const requestedPeriod = Number(req.query.periodDays || req.query.period || 30);
+    const periodDays = [30, 90, 365].includes(requestedPeriod) ? requestedPeriod : 30;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const currentStart = new Date(Date.now() - periodDays * dayMs).toISOString();
+    const previousStart = new Date(Date.now() - periodDays * 2 * dayMs).toISOString();
+
+    const growthPct = (current, previous) => {
+      if (!previous && !current) return 0;
+      if (!previous) return 100;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    };
+
+    const establishments = db.prepare('SELECT * FROM establishments ORDER BY name ASC').all();
+    const salesStmt = db.prepare(`
+      SELECT COUNT(*) as salesCount, COALESCE(SUM(totalAmount), 0) as revenue, COALESCE(AVG(totalAmount), 0) as averageTicket
+      FROM sales
+      WHERE establishmentId = ? AND createdAt >= ?
+    `);
+    const previousSalesStmt = db.prepare(`
+      SELECT COUNT(*) as salesCount, COALESCE(SUM(totalAmount), 0) as revenue
+      FROM sales
+      WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+    `);
+    const productStmt = db.prepare(`
+      SELECT
+        COUNT(*) as productCount,
+        SUM(CASE WHEN stock <= 5 THEN 1 ELSE 0 END) as lowStockCount,
+        SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) as outOfStockCount
+      FROM products
+      WHERE establishmentId = ?
+    `);
+    const userStmt = db.prepare(`
+      SELECT
+        COUNT(*) as userCount,
+        SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) as activeUsers
+      FROM users
+      WHERE establishmentId = ? AND isDeleted = 0 AND role != 'superadmin'
+    `);
+    const lastSaleStmt = db.prepare('SELECT createdAt FROM sales WHERE establishmentId = ? ORDER BY createdAt DESC LIMIT 1');
+    const topProductStmt = db.prepare(`
+      SELECT si.name, SUM(si.quantity) as quantity, COALESCE(SUM(si.totalPrice), 0) as revenue
+      FROM sale_items si
+      INNER JOIN sales s ON si.saleId = s.id
+      WHERE s.establishmentId = ? AND s.createdAt >= ?
+      GROUP BY si.name
+      ORDER BY quantity DESC, revenue DESC
+      LIMIT 5
+    `);
+
+    const rawBusinesses = establishments.map(est => {
+      const current = salesStmt.get(est.id, currentStart);
+      const previous = previousSalesStmt.get(est.id, previousStart, currentStart);
+      const products = productStmt.get(est.id);
+      const users = userStmt.get(est.id);
+      const lastSale = lastSaleStmt.get(est.id);
+      const topProducts = topProductStmt.all(est.id, currentStart);
+
+      return {
+        id: est.id,
+        name: est.name,
+        ownerName: est.ownerName,
+        plan: est.plan,
+        subscriptionStatus: est.subscriptionStatus,
+        monthlyAmount: est.monthlyAmount || 0,
+        periodRevenue: current.revenue || 0,
+        previousPeriodRevenue: previous.revenue || 0,
+        revenueGrowthPct: growthPct(current.revenue || 0, previous.revenue || 0),
+        salesCount: current.salesCount || 0,
+        previousSalesCount: previous.salesCount || 0,
+        salesGrowthPct: growthPct(current.salesCount || 0, previous.salesCount || 0),
+        averageTicket: current.averageTicket || 0,
+        productCount: products.productCount || 0,
+        lowStockCount: products.lowStockCount || 0,
+        outOfStockCount: products.outOfStockCount || 0,
+        userCount: users.userCount || 0,
+        activeUsers: users.activeUsers || 0,
+        lastSaleAt: lastSale?.createdAt || null,
+        topProducts,
+      };
+    });
+
+    const maxRevenue = Math.max(...rawBusinesses.map(b => b.periodRevenue), 1);
+    const maxSales = Math.max(...rawBusinesses.map(b => b.salesCount), 1);
+    const maxUsers = Math.max(...rawBusinesses.map(b => b.activeUsers), 1);
+
+    const businesses = rawBusinesses.map(b => {
+      const revenueScore = (b.periodRevenue / maxRevenue) * 38;
+      const salesScore = (b.salesCount / maxSales) * 24;
+      const userScore = (b.activeUsers / maxUsers) * 14;
+      const growthScore = Math.max(-10, Math.min(14, b.revenueGrowthPct / 4));
+      const activityScore = b.lastSaleAt ? 10 : 0;
+      const stockPenalty = Math.min(12, b.lowStockCount * 1.5 + b.outOfStockCount * 2);
+      const statusPenalty = b.subscriptionStatus === 'suspended' ? 18 : b.subscriptionStatus === 'overdue' ? 8 : 0;
+      const healthScore = Math.max(0, Math.min(100, Math.round(revenueScore + salesScore + userScore + growthScore + activityScore - stockPenalty - statusPenalty)));
+
+      return { ...b, healthScore };
+    }).sort((a, b) => b.healthScore - a.healthScore || b.periodRevenue - a.periodRevenue);
+
+    const totalRevenue = businesses.reduce((sum, b) => sum + b.periodRevenue, 0);
+    const totalSales = businesses.reduce((sum, b) => sum + b.salesCount, 0);
+    const activeBusinesses = businesses.filter(b => b.salesCount > 0).length;
+    const lowStockBusinesses = businesses.filter(b => b.lowStockCount > 0 || b.outOfStockCount > 0).length;
+
+    res.json({
+      periodDays,
+      summary: {
+        totalBusinesses: businesses.length,
+        activeBusinesses,
+        totalRevenue,
+        totalSales,
+        averageTicket: totalSales > 0 ? totalRevenue / totalSales : 0,
+        lowStockBusinesses,
+      },
+      businesses,
+      topFive: businesses.slice(0, 5),
+      bottomFive: [...businesses].sort((a, b) => a.healthScore - b.healthScore || a.periodRevenue - b.periodRevenue).slice(0, 5),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

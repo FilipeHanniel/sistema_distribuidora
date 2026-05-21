@@ -56,3 +56,30 @@ export interface Establishment {
   revenueMonth?: number;
   createdAt: string;
 }
+
+export type PixProvider = 'fake' | 'mercado_pago' | 'asaas' | 'sicoob' | 'itau' | 'santander' | 'bradesco';
+
+export interface PixAccount {
+  id: string;
+  establishmentId: string;
+  name: string;
+  provider: PixProvider;
+  pixKey?: string;
+  active: number;
+  isDefault: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PixTransaction {
+  id: string;
+  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  saleId?: string;
+  paidAt?: string;
+  amount: number;
+  qrCode?: string;
+  qrCodeBase64?: string;
+  ticketUrl?: string;
+  expiresAt?: string;
+  pixAccount?: PixAccount;
+}

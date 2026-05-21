@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
-  Building2, Crown
+  Building2, Crown, CreditCard
 } from 'lucide-react';
 import './layout.css';
 
@@ -14,6 +14,7 @@ import Analytics from '../pages/Analytics';
 import Users from '../pages/Users';
 import SalesHistory from '../pages/SalesHistory';
 import SuperAdmin from '../pages/SuperAdmin';
+import PixSettings from '../pages/PixSettings';
 import StockAlertPopup from '../components/StockAlertPopup';
 import SaleSuccessPopup from '../components/SaleSuccessPopup';
 import PasswordModal from '../components/PasswordModal';
@@ -32,6 +33,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/analytics': 'Estatísticas',
   '/users': 'Funcionários',
   '/comprovantes': 'Comprovantes de Venda',
+  '/pix': 'Contas Pix',
   '/superadmin': 'Painel Super Admin',
 };
 
@@ -107,6 +109,7 @@ export default function AppLayout() {
       { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
       { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Estatísticas' },
       { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
+      { to: '/pix', icon: <CreditCard size={20} />, label: 'Contas Pix' },
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
     ];
   } else {
@@ -259,6 +262,7 @@ export default function AppLayout() {
               <Route path="/inventory" element={gestor ? <Inventory /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/analytics" element={gestor ? <Analytics /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/users" element={gestor ? <Users /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/pix" element={gestor ? <PixSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
 
               {/* Shared routes */}
               <Route path="/sales" element={!superAdmin ? <Sales /> : <Navigate to="/superadmin" />} />

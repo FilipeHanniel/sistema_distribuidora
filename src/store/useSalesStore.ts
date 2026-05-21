@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Sale, SaleItem } from '../types';
+import type { PixTransaction, Sale, SaleItem } from '../types';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useInventoryStore } from './useInventoryStore';
 
@@ -17,6 +17,8 @@ interface SalesState {
   showSuccessPopup: boolean;
   fetchSales: () => Promise<void>;
   addSale: (items: SaleItem[], totalAmount: number, paymentMethod: string) => Promise<string | undefined>;
+  createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string) => Promise<PixTransaction | undefined>;
+  checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   getSalesByDateRange: (startDate: Date, endDate: Date) => Sale[];
   triggerSuccessPopup: (id: string, amount: number, method: PaymentMethod) => void;
   closeSuccessPopup: () => void;
@@ -57,6 +59,34 @@ export const useSalesStore = create<SalesState>((set, get) => ({
     } catch (err) {
       console.error('Falha ao efetivar venda no backend:', err);
       alert(getApiErrorMessage(err, 'Erro ao efetivar venda'));
+      return undefined;
+    }
+  },
+
+  createPixPayment: async (items, totalAmount, pixAccountId) => {
+    try {
+      return await apiRequest<PixTransaction>('/payments/pix', {
+        method: 'POST',
+        body: { items, totalAmount, pixAccountId },
+      });
+    } catch (err) {
+      console.error('Falha ao criar cobranca Pix:', err);
+      alert(getApiErrorMessage(err, 'Erro ao criar cobranca Pix'));
+      return undefined;
+    }
+  },
+
+  checkPixPayment: async (transactionId) => {
+    try {
+      const transaction = await apiRequest<PixTransaction>(`/payments/pix/${transactionId}/status`);
+      if (transaction.status === 'paid' && transaction.saleId) {
+        get().fetchSales();
+        useInventoryStore.getState().fetchProducts();
+        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix');
+      }
+      return transaction;
+    } catch (err) {
+      console.error('Falha ao consultar Pix:', err);
       return undefined;
     }
   },
