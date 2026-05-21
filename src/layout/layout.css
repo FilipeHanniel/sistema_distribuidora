@@ -259,6 +259,129 @@
   gap: 0.75rem;
 }
 
+.notifications-menu {
+  position: relative;
+}
+
+.notification-button {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.notification-button:hover,
+.notification-button.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+
+.notification-count {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.25rem;
+}
+
+.notifications-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: 330px;
+  max-width: calc(100vw - 2rem);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.notifications-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.notifications-header strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.notifications-header button {
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.notifications-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.notification-item {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  text-align: left;
+  padding: 0.8rem 0.9rem;
+  cursor: pointer;
+}
+
+.notification-item.unread {
+  background: rgba(var(--primary-rgb), 0.06);
+}
+
+.notification-item span,
+.notification-item small {
+  display: block;
+}
+
+.notification-item span {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 800;
+  margin-bottom: 0.2rem;
+}
+
+.notification-item small,
+.notification-empty {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.notification-empty {
+  padding: 1rem;
+  text-align: center;
+}
+
 .hamburger-btn {
   display: none;
   background: none;

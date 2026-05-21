@@ -146,6 +146,40 @@ const initDB = () => {
     )
   `).run();
 
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS ai_reports (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      periodType TEXT NOT NULL,
+      periodStart TEXT NOT NULL,
+      periodEnd TEXT NOT NULL,
+      content TEXT NOT NULL,
+      metrics TEXT,
+      createdAt TEXT,
+      UNIQUE(establishmentId, periodType, periodStart),
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT,
+      userId TEXT,
+      audience TEXT DEFAULT 'gestor',
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      referenceType TEXT,
+      referenceId TEXT,
+      readAt TEXT,
+      scheduledFor TEXT,
+      createdAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id),
+      FOREIGN KEY (userId) REFERENCES users(id)
+    )
+  `).run();
+
   // ============================================================
   // MIGRAÇÕES
   // ============================================================
@@ -175,6 +209,8 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_payments_establishment ON payments(establishmentId, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_pix_accounts_establishment ON pix_accounts(establishmentId, active, isDefault)',
     'CREATE INDEX IF NOT EXISTS idx_payment_transactions_establishment ON payment_transactions(establishmentId, status, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_reports_establishment ON ai_reports(establishmentId, periodType, periodStart)',
+    'CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(establishmentId, audience, readAt, createdAt)',
   ];
   for (const sql of indexes) {
     try { db.prepare(sql).run(); } catch (e) {}

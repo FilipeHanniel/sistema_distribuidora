@@ -83,3 +83,18 @@ export interface PixTransaction {
   expiresAt?: string;
   pixAccount?: PixAccount;
 }
+
+export interface AppNotification {
+  id: string;
+  establishmentId?: string;
+  userId?: string;
+  audience: 'gestor' | 'operador' | 'all';
+  type: string;
+  title: string;
+  message: string;
+  referenceType?: string;
+  referenceId?: string;
+  readAt?: string;
+  scheduledFor?: string;
+  createdAt: string;
+}

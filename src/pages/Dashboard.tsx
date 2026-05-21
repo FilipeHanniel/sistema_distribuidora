@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, ShoppingBag, Trash2, Sparkles, TrendingUp } from 'lucide-react';
+import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, FileText, CalendarDays } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
 import './Dashboard.css';
@@ -16,53 +16,58 @@ interface StockPrediction {
   urgency: 'critical' | 'warning' | 'attention';
 }
 
-interface ExternalSuggestion {
+interface AiReport {
   id: string;
-  productName: string;
-  suggestion: string;
-  count: number;
-  updatedAt: string;
+  periodType: 'daily' | 'weekly';
+  periodStart: string;
+  periodEnd: string;
+  content: string;
+  cached: boolean;
+  metrics: {
+    salesCount: number;
+    totalRevenue: number;
+    averageTicket: number;
+    previousRevenue: number;
+    previousSalesCount: number;
+  };
 }
 
 export default function Dashboard() {
   const [predictions, setPredictions] = useState<StockPrediction[]>([]);
-  const [externalSuggestions, setExternalSuggestions] = useState<ExternalSuggestion[]>([]);
+  const [dailyReport, setDailyReport] = useState<AiReport | null>(null);
+  const [weeklyReport, setWeeklyReport] = useState<AiReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reportLoading, setReportLoading] = useState(false);
   const { user } = useAuthStore();
 
   const isGestor = user?.role === 'gestor';
+  const isMonday = new Date().getDay() === 1;
 
   const fetchData = useCallback(async () => {
     try {
-      // 1. Fetch Predictions
       const predictions = await apiRequest<StockPrediction[]>('/ai/stock-predictions');
       setPredictions(predictions);
 
-      // 2. Fetch External Suggestions (Admin only)
       if (isGestor) {
-        const suggestions = await apiRequest<ExternalSuggestion[]>('/ai/suggestions');
-        setExternalSuggestions(suggestions);
+        setReportLoading(true);
+        const daily = await apiRequest<AiReport>('/ai/reports?period=daily');
+        setDailyReport(daily);
+        if (isMonday) {
+          const weekly = await apiRequest<AiReport>('/ai/reports?period=weekly');
+          setWeeklyReport(weekly);
+        }
       }
     } catch (err) {
       console.error('Erro ao buscar dados do Dashboard:', err);
     } finally {
       setLoading(false);
+      setReportLoading(false);
     }
-  }, [isGestor]);
+  }, [isGestor, isMonday]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  const dismissSuggestion = async (id: string) => {
-    if (!confirm('Deseja remover esta sugestão da lista?')) return;
-    try {
-      await apiRequest(`/ai/suggestions/${id}`, { method: 'DELETE' });
-      setExternalSuggestions(prev => prev.filter(s => s.id !== id));
-    } catch (err) {
-      console.error('Erro ao excluir sugestão:', err);
-    }
-  };
 
   const urgencyLabel = (u: string) => {
     switch (u) {
@@ -193,38 +198,32 @@ export default function Dashboard() {
 
         {/* --- SEÇÃO 2: OPORTUNIDADES DE COMPRA (Sugestões Externas) --- */}
         {isGestor && (
-          <section className="suggestions-section">
-            <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#8b5cf6' }}>
-              <TrendingUp size={20} /> Oportunidades de Compra (Demanda IA)
-            </h2>
-
-            {externalSuggestions.length === 0 ? (
-              <div className="card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                <Sparkles size={32} style={{ opacity: 0.3, marginBottom: '0.5rem' }} />
-                <p>Nenhuma oportunidade externa identificada no momento.</p>
+          <section className="ai-report-section">
+            <div className="ai-report-header">
+              <div>
+                <h2><FileText size={20} /> Relatorio inteligente diario</h2>
+                <p>Gerado uma vez por dia com base nas vendas, produtos e estoque do estabelecimento.</p>
               </div>
-            ) : (
-              <div className="suggestions-grid">
-                {externalSuggestions.map((sugg, index) => (
-                  <div key={sugg.id} className="suggestion-card">
-                    <div className="suggestion-header">
-                      <div className="suggestion-title-group">
-                        <span className="suggestion-rank">{index + 1}º</span>
-                        <span className="suggestion-name">{sugg.productName}</span>
-                      </div>
-                      <span className="suggestion-badge">DEMANDA</span>
-                    </div>
-                    <p className="suggestion-reason">{sugg.suggestion}</p>
-                    <div className="suggestion-footer">
-                      <span className="suggestion-count">
-                        <ShoppingBag size={14} /> Solicitado {sugg.count}x no PDV
-                      </span>
-                      <button className="btn-dismiss" onClick={() => dismissSuggestion(sugg.id)} title="Descartar sugestão">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              {reportLoading && <span className="ai-report-loading">Gerando analise...</span>}
+            </div>
+
+            {dailyReport && (
+              <div className="ai-report-card">
+                <div className="ai-report-meta">
+                  <span>{new Date(dailyReport.periodStart).toLocaleDateString('pt-BR')}</span>
+                  <strong>{dailyReport.metrics.salesCount} vendas - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(dailyReport.metrics.totalRevenue)}</strong>
+                </div>
+                <div className="ai-report-content">{dailyReport.content}</div>
+              </div>
+            )}
+
+            {isMonday && weeklyReport && (
+              <div className="ai-report-card weekly">
+                <div className="ai-report-meta">
+                  <span><CalendarDays size={15} /> Relatorio semanal</span>
+                  <strong>{weeklyReport.metrics.salesCount} vendas - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(weeklyReport.metrics.totalRevenue)}</strong>
+                </div>
+                <div className="ai-report-content">{weeklyReport.content}</div>
               </div>
             )}
           </section>

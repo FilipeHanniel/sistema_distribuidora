@@ -213,6 +213,184 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
   return saleId;
 };
 
+const startOfLocalDay = (date = new Date()) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const addDays = (date, days) => {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+};
+
+const getReportWindow = (periodType) => {
+  const today = startOfLocalDay();
+  if (periodType === 'weekly') {
+    const currentMonday = addDays(today, -((today.getDay() + 6) % 7));
+    const previousMonday = addDays(currentMonday, -7);
+    return { start: previousMonday, end: currentMonday };
+  }
+  const yesterday = addDays(today, -1);
+  return { start: yesterday, end: today };
+};
+
+const collectAiReportMetrics = (estId, startIso, endIso) => {
+  const sales = db.prepare(`
+    SELECT id, totalAmount, paymentMethod, createdAt
+    FROM sales
+    WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+    ORDER BY createdAt ASC
+  `).all(estId, startIso, endIso);
+
+  const topProducts = db.prepare(`
+    SELECT si.name, SUM(si.quantity) as quantity, COALESCE(SUM(si.totalPrice), 0) as revenue
+    FROM sale_items si
+    INNER JOIN sales s ON s.id = si.saleId
+    WHERE s.establishmentId = ? AND s.createdAt >= ? AND s.createdAt < ?
+    GROUP BY si.productId, si.name
+    ORDER BY quantity DESC, revenue DESC
+    LIMIT 8
+  `).all(estId, startIso, endIso);
+
+  const lowStock = db.prepare(`
+    SELECT name, stock, category
+    FROM products
+    WHERE establishmentId = ? AND stock <= 5
+    ORDER BY stock ASC, name ASC
+    LIMIT 10
+  `).all(estId);
+
+  const paymentMethods = db.prepare(`
+    SELECT paymentMethod, COUNT(*) as count, COALESCE(SUM(totalAmount), 0) as revenue
+    FROM sales
+    WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+    GROUP BY paymentMethod
+    ORDER BY revenue DESC
+  `).all(estId, startIso, endIso);
+
+  const previousStart = new Date(new Date(startIso).getTime() - (new Date(endIso).getTime() - new Date(startIso).getTime())).toISOString();
+  const previous = db.prepare(`
+    SELECT COUNT(*) as count, COALESCE(SUM(totalAmount), 0) as revenue
+    FROM sales
+    WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+  `).get(estId, previousStart, startIso);
+
+  const totalRevenue = sales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+  const averageTicket = sales.length > 0 ? totalRevenue / sales.length : 0;
+
+  return {
+    salesCount: sales.length,
+    totalRevenue,
+    averageTicket,
+    previousRevenue: previous.revenue || 0,
+    previousSalesCount: previous.count || 0,
+    paymentMethods,
+    topProducts,
+    lowStock,
+  };
+};
+
+const buildAiReportPrompt = ({ periodType, metrics, startIso, endIso, establishmentName }) => `
+Voce e um consultor de gestao para um pequeno comercio/distribuidora.
+Crie um relatorio ${periodType === 'weekly' ? 'semanal' : 'diario'} em portugues do Brasil, objetivo, pratico e orientado a decisao.
+
+Estabelecimento: ${establishmentName || 'Estabelecimento'}
+Periodo: ${startIso} ate ${endIso}
+Vendas: ${metrics.salesCount}
+Faturamento: R$ ${metrics.totalRevenue.toFixed(2)}
+Ticket medio: R$ ${metrics.averageTicket.toFixed(2)}
+Periodo anterior: ${metrics.previousSalesCount} vendas | R$ ${Number(metrics.previousRevenue).toFixed(2)}
+Meios de pagamento: ${metrics.paymentMethods.map(p => `${p.paymentMethod}: ${p.count} vendas/R$${Number(p.revenue).toFixed(2)}`).join('; ') || 'sem vendas'}
+Produtos mais vendidos: ${metrics.topProducts.map(p => `${p.name}: ${p.quantity} un/R$${Number(p.revenue).toFixed(2)}`).join('; ') || 'sem vendas'}
+Estoque baixo: ${metrics.lowStock.map(p => `${p.name}: ${p.stock} un`).join('; ') || 'nenhum'}
+
+Formato obrigatorio:
+1. Resumo executivo em 3 linhas.
+2. O que melhorou ou piorou.
+3. Produtos que merecem atencao.
+4. Acoes recomendadas para o proximo periodo.
+5. Alertas de estoque e caixa.
+
+Nao invente dados. Se nao houver vendas, recomende acoes simples para gerar movimento.
+`;
+
+const generateAiReport = async ({ estId, periodType }) => {
+  if (!geminiModel) throw new Error('Gemini AI nao configurado.');
+  const est = ensureEstablishmentExists(estId);
+  const { start, end } = getReportWindow(periodType);
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+  const cached = db.prepare(
+    'SELECT * FROM ai_reports WHERE establishmentId = ? AND periodType = ? AND periodStart = ?'
+  ).get(estId, periodType, startIso);
+  if (cached) return { ...cached, metrics: JSON.parse(cached.metrics || '{}'), cached: true };
+
+  const metrics = collectAiReportMetrics(estId, startIso, endIso);
+  const prompt = buildAiReportPrompt({ periodType, metrics, startIso, endIso, establishmentName: est?.name });
+  const result = await geminiModel.generateContent(prompt);
+  const content = result.response.text();
+  const id = uuidv4();
+  const createdAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO ai_reports (id, establishmentId, periodType, periodStart, periodEnd, content, metrics, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, estId, periodType, startIso, endIso, content, JSON.stringify(metrics), createdAt);
+  return { id, establishmentId: estId, periodType, periodStart: startIso, periodEnd: endIso, content, metrics, createdAt, cached: false };
+};
+
+const createNotification = ({ establishmentId, userId = null, audience = 'gestor', type, title, message, referenceType = null, referenceId = null, scheduledFor = null }) => {
+  if (referenceId) {
+    const existing = db.prepare(
+      'SELECT id FROM notifications WHERE establishmentId IS ? AND type = ? AND referenceType IS ? AND referenceId IS ? AND audience = ?'
+    ).get(establishmentId, type, referenceType, referenceId, audience);
+    if (existing) return existing.id;
+  }
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO notifications (id, establishmentId, userId, audience, type, title, message, referenceType, referenceId, scheduledFor, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, establishmentId, userId, audience, type, title, message, referenceType, referenceId, scheduledFor, new Date().toISOString());
+  return id;
+};
+
+const generateScheduledAiReports = async (periodType = 'daily') => {
+  if (!geminiModel) return;
+  const ests = db.prepare("SELECT id FROM establishments WHERE subscriptionStatus != 'suspended'").all();
+  for (const est of ests) {
+    try {
+      await generateAiReport({ estId: est.id, periodType });
+    } catch (err) {
+      console.error('[AI Scheduled Report Error]', est.id, err.message);
+    }
+  }
+};
+
+const publishScheduledReportNotifications = async (periodType = 'daily') => {
+  if (!geminiModel) return;
+  const ests = db.prepare("SELECT id FROM establishments WHERE subscriptionStatus != 'suspended'").all();
+  for (const est of ests) {
+    try {
+      const report = await generateAiReport({ estId: est.id, periodType });
+      createNotification({
+        establishmentId: est.id,
+        audience: 'gestor',
+        type: `ai_report_${periodType}`,
+        title: periodType === 'weekly' ? 'Relatorio semanal disponivel' : 'Relatorio diario disponivel',
+        message: periodType === 'weekly'
+          ? 'O resumo inteligente da semana anterior ja esta pronto para leitura.'
+          : 'O resumo inteligente do dia anterior ja esta pronto para leitura.',
+        referenceType: 'ai_report',
+        referenceId: report.id,
+        scheduledFor: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('[Notification Report Error]', est.id, err.message);
+    }
+  }
+};
+
 // ==============================
 // AUTENTICAÇÃO
 // ==============================
@@ -547,6 +725,56 @@ app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
 
 app.get('/api/pix/providers', authenticateToken, isGestorOrAbove, (req, res) => {
   res.json(PROVIDERS);
+});
+
+app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') {
+      return res.json([]);
+    }
+    const notifications = db.prepare(`
+      SELECT *
+      FROM notifications
+      WHERE (establishmentId = ? OR establishmentId IS NULL)
+        AND (userId IS NULL OR userId = ?)
+        AND audience IN ('gestor', 'all')
+      ORDER BY createdAt DESC
+      LIMIT 50
+    `).all(req.user.establishmentId, req.user.id);
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/notifications/:id/read', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
+    db.prepare(`
+      UPDATE notifications
+      SET readAt = COALESCE(readAt, ?)
+      WHERE id = ? AND (establishmentId = ? OR establishmentId IS NULL) AND (userId IS NULL OR userId = ?)
+    `).run(new Date().toISOString(), req.params.id, req.user.establishmentId, req.user.id);
+    res.json({ message: 'Notificacao marcada como lida.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/notifications/read-all', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
+    db.prepare(`
+      UPDATE notifications
+      SET readAt = COALESCE(readAt, ?)
+      WHERE (establishmentId = ? OR establishmentId IS NULL)
+        AND (userId IS NULL OR userId = ?)
+        AND audience IN ('gestor', 'all')
+    `).run(new Date().toISOString(), req.user.establishmentId, req.user.id);
+    res.json({ message: 'Notificacoes marcadas como lidas.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
@@ -1168,7 +1396,7 @@ app.delete('/api/admin/payments/:id', authenticateToken, isSuperAdmin, (req, res
 // ==============================
 // ROTAS DE IA
 // ==============================
-app.get('/api/ai/stock-predictions', authenticateToken, (req, res) => {
+app.get('/api/ai/stock-predictions', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
     const f = estFilterWhere(req);
     const products = db.prepare(`SELECT * FROM products ${f.clause}`).all(...f.params);
@@ -1206,79 +1434,26 @@ app.get('/api/ai/stock-predictions', authenticateToken, (req, res) => {
   }
 });
 
-app.post('/api/ai/chat', authenticateToken, isGestorOrAbove, async (req, res) => {
-  if (!geminiModel) return res.status(503).json({ error: 'Gemini AI não configurado.' });
-  const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'Mensagem é obrigatória.' });
-
+app.get('/api/ai/reports', authenticateToken, isGestorOrAbove, async (req, res) => {
   try {
-    const f = estFilterWhere(req);
-    const products = db.prepare(`SELECT name, stock, sellPrice, costPrice, category FROM products ${f.clause}`).all(...f.params);
-    const totalStockValue = products.reduce((sum, p) => sum + (p.stock * p.costPrice), 0);
-    const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const estClause = req.user.role !== 'superadmin' ? 'AND s.establishmentId = ?' : '';
-    const estParams = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
-
-    const recentSales = db.prepare(`SELECT s.totalAmount FROM sales s WHERE s.createdAt >= ? ${estClause}`).all(sevenDaysAgo.toISOString(), ...estParams);
-    const weekRevenue = recentSales.reduce((sum, s) => sum + s.totalAmount, 0);
-    const topSellers = db.prepare(`
-      SELECT si.name, SUM(si.quantity) as totalQty, SUM(si.totalPrice) as totalRev
-      FROM sale_items si INNER JOIN sales s ON si.saleId = s.id
-      WHERE s.createdAt >= ? ${estClause} GROUP BY si.productId ORDER BY totalQty DESC LIMIT 5
-    `).all(thirtyDaysAgo.toISOString(), ...estParams);
-    const lowStock = products.filter(p => p.stock <= 5);
-
-    const contextPrompt = `Você é o assistente de gestão inteligente de uma distribuidora de bebidas.
-Responda SEMPRE em português do Brasil, de forma concisa e útil.
-DADOS: Produtos: ${products.length} | Estoque (custo): R$${totalStockValue.toFixed(2)} | Faturamento 7d: R$${weekRevenue.toFixed(2)}
-TOP VENDIDOS: ${topSellers.map((t, i) => `${i + 1}.${t.name}(${t.totalQty}un)`).join(', ') || 'sem dados'}
-BAIXO ESTOQUE: ${lowStock.map(p => `${p.name}:${p.stock}un`).join(', ') || 'nenhum'}
-PERGUNTA: ${message}
-Responda de forma objetiva com dados.`;
-
-    const result = await geminiModel.generateContent(contextPrompt);
-    res.json({ response: result.response.text() });
+    if (req.user.role === 'superadmin') {
+      return res.status(403).json({ error: 'Relatorios de IA sao por estabelecimento.' });
+    }
+    const periodType = req.query.period === 'weekly' ? 'weekly' : 'daily';
+    const report = await generateAiReport({ estId: req.user.establishmentId, periodType });
+    res.json(report);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao processar sua pergunta.' });
+    console.error('[AI Report Error]', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/ai/cross-sell', authenticateToken, isTenantUser, async (req, res) => {
-  if (!geminiModel) return res.json({ suggestion: null, productName: null });
-  const { cartItems } = req.body;
-  if (!cartItems || cartItems.length === 0) return res.json({ suggestion: null, productName: null });
+app.post('/api/ai/chat', authenticateToken, (req, res) => {
+  res.status(410).json({ error: 'Chat de IA foi desativado. Use os relatorios gerenciais.' });
+});
 
-  try {
-    const estClause = req.user.role !== 'superadmin' ? 'AND s.establishmentId = ?' : '';
-    const estParams = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
-    const placeholders = cartItems.map(() => '?').join(',');
-
-    const coOccurrences = db.prepare(`
-      SELECT si2.name, COUNT(*) as frequency
-      FROM sale_items si1 INNER JOIN sale_items si2 ON si1.saleId = si2.saleId AND si1.productId != si2.productId
-      INNER JOIN sales s ON si1.saleId = s.id
-      WHERE si1.name IN (${placeholders}) AND si2.name NOT IN (${placeholders}) ${estClause}
-      GROUP BY si2.productId ORDER BY frequency DESC LIMIT 5
-    `).all(...cartItems, ...cartItems, ...estParams);
-
-    if (coOccurrences.length === 0) return res.json({ suggestion: null, productName: null });
-
-    const topCoProducts = coOccurrences.map(c => `${c.name}(${c.frequency}x)`).join(', ');
-    const prompt = `Você é assistente de vendas de distribuidora de bebidas. O cliente compra: ${cartItems.join(', ')}. Histórico: ${topCoProducts}. Sugira 1 produto complementar. Formato EXATO: PRODUTO|FRASE_CURTA (máx 10 palavras total)`;
-    const result = await geminiModel.generateContent(prompt);
-    const parts = result.response.text().trim().split('|');
-    const suggestedName = parts[0]?.trim();
-    const suggestedText = parts[1]?.trim();
-
-    const estIdFilter = req.user.role !== 'superadmin' ? 'AND establishmentId = ?' : '';
-    const estIdParam = req.user.role !== 'superadmin' ? [req.user.establishmentId] : [];
-    const inStockProduct = db.prepare(`SELECT id, name, stock FROM products WHERE name = ? COLLATE NOCASE ${estIdFilter}`).get(suggestedName, ...estIdParam);
-    if (inStockProduct?.stock > 0) return res.json({ suggestion: suggestedText, productName: inStockProduct.name });
-    res.json({ suggestion: null, productName: null });
-  } catch (err) {
-    res.json({ suggestion: null, productName: null });
-  }
+app.post('/api/ai/cross-sell', authenticateToken, (req, res) => {
+  res.status(410).json({ error: 'Sugestoes de IA no PDV foram desativadas. Use os relatorios gerenciais.' });
 });
 
 app.get('/api/ai/suggestions', authenticateToken, isGestorOrAbove, (req, res) => {
@@ -1309,6 +1484,27 @@ app.delete('/api/ai/suggestions/:id', authenticateToken, isGestorOrAbove, (req, 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', env: NODE_ENV, timestamp: new Date().toISOString() });
 });
+
+let lastScheduledMinute = '';
+setInterval(() => {
+  const now = new Date();
+  const key = now.toISOString().slice(0, 16);
+  if (key === lastScheduledMinute) return;
+  lastScheduledMinute = key;
+
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const time = `${hh}:${mm}`;
+
+  if (time === '03:00') {
+    generateScheduledAiReports('daily');
+    if (now.getDay() === 1) generateScheduledAiReports('weekly');
+  }
+  if (time === '06:00') {
+    publishScheduledReportNotifications('daily');
+    if (now.getDay() === 1) publishScheduledReportNotifications('weekly');
+  }
+}, 60 * 1000);
 
 if (NODE_ENV === 'production') {
   app.use((req, res) => {

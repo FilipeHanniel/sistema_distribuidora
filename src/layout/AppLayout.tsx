@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
-  Building2, Crown, CreditCard
+  Building2, Crown, CreditCard, Bell, CheckCheck
 } from 'lucide-react';
 import './layout.css';
 
@@ -19,12 +19,13 @@ import StockAlertPopup from '../components/StockAlertPopup';
 import SaleSuccessPopup from '../components/SaleSuccessPopup';
 import PasswordModal from '../components/PasswordModal';
 import Login from '../pages/Login';
-import AiChatWidget from '../components/AiChatWidget';
 
 import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useUserStore } from '../store/useUserStore';
+import { apiRequest } from '../lib/api';
+import type { AppNotification } from '../types';
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Painel de Gestão',
@@ -52,8 +53,11 @@ export default function AppLayout() {
 
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const [isDark, setIsDark] = useState(() => localStorage.getItem('theme') === 'dark');
 
   const superAdmin = isSuperAdmin();
@@ -87,10 +91,25 @@ export default function AppLayout() {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setIsUserMenuOpen(false);
       }
+      if (notificationsRef.current && !notificationsRef.current.contains(e.target as Node)) {
+        setIsNotificationsOpen(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  useEffect(() => {
+    if (!gestor || !isAuthenticated()) return;
+    const loadNotifications = () => {
+      apiRequest<AppNotification[]>('/notifications')
+        .then(setNotifications)
+        .catch(() => setNotifications([]));
+    };
+    loadNotifications();
+    const timer = window.setInterval(loadNotifications, 60000);
+    return () => window.clearInterval(timer);
+  }, [gestor, isAuthenticated]);
 
   if (!isAuthenticated()) return <Login />;
 
@@ -124,6 +143,18 @@ export default function AppLayout() {
   const roleColor = superAdmin ? '#f59e0b' : gestor ? 'var(--primary)' : '#16a34a';
   const brandName = !superAdmin && user?.establishmentName ? user.establishmentName : 'Distribuidora';
   const brandCaption = superAdmin ? 'v2.0' : roleLabel;
+  const unreadNotifications = notifications.filter(n => !n.readAt).length;
+
+  const markNotificationRead = async (id: string) => {
+    await apiRequest(`/notifications/${id}/read`, { method: 'PATCH' });
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, readAt: new Date().toISOString() } : n));
+  };
+
+  const markAllNotificationsRead = async () => {
+    await apiRequest('/notifications/read-all', { method: 'PATCH' });
+    const now = new Date().toISOString();
+    setNotifications(prev => prev.map(n => ({ ...n, readAt: n.readAt || now })));
+  };
 
   return (
     <BrowserRouter>
@@ -208,6 +239,34 @@ export default function AppLayout() {
             </div>
 
             <div className="topbar-right">
+              {gestor && (
+                <div className="notifications-menu" ref={notificationsRef}>
+                  <button className={`notification-button ${isNotificationsOpen ? 'active' : ''}`} onClick={() => setIsNotificationsOpen(!isNotificationsOpen)} aria-label="Notificacoes">
+                    <Bell size={18} />
+                    {unreadNotifications > 0 && <span className="notification-count">{unreadNotifications}</span>}
+                  </button>
+                  {isNotificationsOpen && (
+                    <div className="notifications-dropdown">
+                      <div className="notifications-header">
+                        <strong>Notificacoes</strong>
+                        {unreadNotifications > 0 && (
+                          <button onClick={markAllNotificationsRead}><CheckCheck size={14} /> Ler todas</button>
+                        )}
+                      </div>
+                      <div className="notifications-list">
+                        {notifications.length === 0 ? (
+                          <div className="notification-empty">Nenhuma notificacao.</div>
+                        ) : notifications.map(item => (
+                          <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => markNotificationRead(item.id)}>
+                            <span>{item.title}</span>
+                            <small>{item.message}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="user-profile-menu" ref={userMenuRef}>
                 <div
                   className={`user-info ${isUserMenuOpen ? 'active' : ''}`}
@@ -291,7 +350,6 @@ export default function AppLayout() {
         )}
 
         <StockAlertPopup />
-        {gestor && <AiChatWidget />}
       </div>
     </BrowserRouter>
   );

@@ -1,10 +1,8 @@
-import { useState, useMemo, useEffect, useRef, useCallback, type FormEvent } from 'react';
+import { useState, useMemo, useEffect, useRef, type FormEvent } from 'react';
 import { Search, ShoppingCart, Plus, Minus, Trash2, CheckCircle, CreditCard, Banknote, QrCode, Scan, Tag, X } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
-import { useAuthStore } from '../store/useAuthStore';
 import { apiRequest } from '../lib/api';
-import CrossSellPopup from '../components/CrossSellPopup';
 import Modal from '../components/Modal';
 import type { PixAccount, PixTransaction, Product, SaleItem } from '../types';
 import './Sales.css';
@@ -28,15 +26,12 @@ export default function Sales() {
   const [selectedPixAccountId, setSelectedPixAccountId] = useState('');
   const [pixTransaction, setPixTransaction] = useState<PixTransaction | null>(null);
   const [pixWaiting, setPixWaiting] = useState(false);
-  const [crossSell, setCrossSell] = useState<{ productName: string; suggestion: string } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
-  const crossSellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { products, addProduct } = useInventoryStore();
   const { addSale, createPixPayment, checkPixPayment } = useSalesStore();
-  const { token } = useAuthStore();
 
   useEffect(() => {
     apiRequest<PixAccount[]>('/pix/accounts')
@@ -52,39 +47,6 @@ export default function Sales() {
     const cats = Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort();
     return ['Todos', ...cats];
   }, [products]);
-
-  const fetchCrossSell = useCallback(async (cartItems: SaleItem[]) => {
-    if (cartItems.length === 0) {
-      setCrossSell(null);
-      return;
-    }
-    try {
-      const res = await fetch('/api/ai/cross-sell', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ cartItems: cartItems.map(i => i.name) })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.suggestion && data.productName) {
-          setCrossSell({ productName: data.productName, suggestion: data.suggestion });
-        }
-      }
-    } catch {
-      // Silencioso
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (crossSellTimer.current) clearTimeout(crossSellTimer.current);
-    if (cart.length > 0) {
-      crossSellTimer.current = setTimeout(() => fetchCrossSell(cart), 2000);
-    }
-    return () => { if (crossSellTimer.current) clearTimeout(crossSellTimer.current); };
-  }, [cart, fetchCrossSell]);
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
@@ -430,14 +392,6 @@ export default function Sales() {
           </div>
         </div>
       </div>
-
-      {cart.length > 0 && crossSell && (
-        <CrossSellPopup
-          productName={crossSell.productName}
-          suggestion={crossSell.suggestion}
-          onClose={() => setCrossSell(null)}
-        />
-      )}
 
       <Modal isOpen={!!pixTransaction} onClose={() => !pixWaiting && setPixTransaction(null)} title="Pagamento Pix">
         {pixTransaction && (
