@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -11,6 +12,23 @@ const { addOneMonth } = require('./database');
 const { PROVIDERS, getPixProvider, makeProviderReference } = require('./pixProviders');
 
 const app = express();
+
+const loadEnvFile = (filePath) => {
+  if (!fs.existsSync(filePath)) return;
+  const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const separator = trimmed.indexOf('=');
+    if (separator === -1) continue;
+    const key = trimmed.slice(0, separator).trim();
+    const value = trimmed.slice(separator + 1).trim().replace(/^["']|["']$/g, '');
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+};
+
+loadEnvFile(path.join(__dirname, '..', '.env'));
+loadEnvFile(path.join(__dirname, '.env'));
 
 // ==============================
 // CONFIGURAÇÃO
@@ -42,13 +60,15 @@ if (NODE_ENV === 'production') {
 // ==============================
 // GEMINI AI
 // ==============================
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyBFuOlj6PQ3ADxJDMF0EbcQnUL5G8FPlr8';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 let genAI = null;
 let geminiModel = null;
-if (GEMINI_API_KEY && GEMINI_API_KEY !== 'COLOQUE_SUA_CHAVE_AQUI') {
+if (GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   console.log('✅ Gemini AI configurado com sucesso!');
+} else {
+  console.warn('⚠️ Gemini AI não configurado. Defina GEMINI_API_KEY no ambiente.');
 }
 
 // ==============================
