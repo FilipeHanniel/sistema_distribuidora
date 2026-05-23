@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
-  Building2, Crown, CreditCard, Bell, CheckCheck
+  Building2, Crown, CreditCard, Bell, CheckCheck, FileText
 } from 'lucide-react';
 import './layout.css';
 
@@ -15,6 +15,7 @@ import Users from '../pages/Users';
 import SalesHistory from '../pages/SalesHistory';
 import SuperAdmin from '../pages/SuperAdmin';
 import PixSettings from '../pages/PixSettings';
+import FiscalSettings from '../pages/FiscalSettings';
 import StockAlertPopup from '../components/StockAlertPopup';
 import SaleSuccessPopup from '../components/SaleSuccessPopup';
 import PasswordModal from '../components/PasswordModal';
@@ -35,6 +36,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/users': 'Funcionários',
   '/comprovantes': 'Comprovantes de Venda',
   '/pix': 'Contas Pix',
+  '/fiscal': 'Fiscal NFC-e',
   '/superadmin': 'Painel Super Admin',
 };
 
@@ -129,6 +131,7 @@ export default function AppLayout() {
       { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Estatísticas' },
       { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
       { to: '/pix', icon: <CreditCard size={20} />, label: 'Contas Pix' },
+      { to: '/fiscal', icon: <FileText size={20} />, label: 'Fiscal NFC-e' },
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
     ];
   } else {
@@ -322,6 +325,7 @@ export default function AppLayout() {
               <Route path="/analytics" element={gestor ? <Analytics /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/users" element={gestor ? <Users /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/pix" element={gestor ? <PixSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/fiscal" element={gestor ? <FiscalSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
 
               {/* Shared routes */}
               <Route path="/sales" element={!superAdmin ? <Sales /> : <Navigate to="/superadmin" />} />

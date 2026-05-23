@@ -98,3 +98,47 @@ export interface AppNotification {
   scheduledFor?: string;
   createdAt: string;
 }
+
+export interface FiscalSettings {
+  establishmentId: string;
+  enabled: number;
+  environment: 'homologation' | 'production';
+  documentModel: '65';
+  serie: string;
+  nextNumber: number;
+  cnpj: string;
+  stateRegistration: string;
+  legalName: string;
+  tradeName: string;
+  taxRegime: 'simples' | 'normal';
+  cscId: string;
+  hasCsc: boolean;
+  certificatePath: string;
+  hasCertificatePassword: boolean;
+  autoIssueOnPayment: number;
+  autoPrintOnAuthorization: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface FiscalDocument {
+  id: string;
+  establishmentId: string;
+  saleId: string;
+  model: '65';
+  serie?: string;
+  number?: number;
+  environment: 'homologation' | 'production';
+  status: 'pending_configuration' | 'pending_authorization' | 'authorized' | 'rejected' | 'cancelled';
+  accessKey?: string;
+  protocol?: string;
+  qrCodeUrl?: string;
+  error?: string;
+  authorizedAt?: string;
+  printedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  totalAmount?: number;
+  paymentMethod?: string;
+  saleCreatedAt?: string;
+}

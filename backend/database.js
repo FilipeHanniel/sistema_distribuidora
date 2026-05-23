@@ -180,6 +180,55 @@ const initDB = () => {
     )
   `).run();
 
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS fiscal_settings (
+      establishmentId TEXT PRIMARY KEY,
+      enabled INTEGER DEFAULT 0,
+      environment TEXT DEFAULT 'homologation',
+      documentModel TEXT DEFAULT '65',
+      serie TEXT DEFAULT '1',
+      nextNumber INTEGER DEFAULT 1,
+      cnpj TEXT,
+      stateRegistration TEXT,
+      legalName TEXT,
+      tradeName TEXT,
+      taxRegime TEXT DEFAULT 'simples',
+      cscId TEXT,
+      csc TEXT,
+      certificatePath TEXT,
+      certificatePassword TEXT,
+      autoIssueOnPayment INTEGER DEFAULT 0,
+      autoPrintOnAuthorization INTEGER DEFAULT 0,
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS fiscal_documents (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      saleId TEXT NOT NULL,
+      model TEXT DEFAULT '65',
+      serie TEXT,
+      number INTEGER,
+      environment TEXT DEFAULT 'homologation',
+      status TEXT DEFAULT 'pending_configuration',
+      accessKey TEXT,
+      protocol TEXT,
+      qrCodeUrl TEXT,
+      xml TEXT,
+      error TEXT,
+      authorizedAt TEXT,
+      printedAt TEXT,
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id),
+      FOREIGN KEY (saleId) REFERENCES sales(id)
+    )
+  `).run();
+
   // ============================================================
   // MIGRAÇÕES
   // ============================================================
@@ -211,6 +260,7 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_payment_transactions_establishment ON payment_transactions(establishmentId, status, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_ai_reports_establishment ON ai_reports(establishmentId, periodType, periodStart)',
     'CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(establishmentId, audience, readAt, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_fiscal_documents_sale ON fiscal_documents(establishmentId, saleId, status)',
   ];
   for (const sql of indexes) {
     try { db.prepare(sql).run(); } catch (e) {}

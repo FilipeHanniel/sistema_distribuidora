@@ -201,6 +201,107 @@ const sanitizePixAccount = (account) => {
   };
 };
 
+const sanitizeFiscalSettings = (settings) => {
+  if (!settings) return null;
+  return {
+    establishmentId: settings.establishmentId,
+    enabled: Number(settings.enabled || 0),
+    environment: settings.environment,
+    documentModel: settings.documentModel,
+    serie: settings.serie,
+    nextNumber: Number(settings.nextNumber || 1),
+    cnpj: settings.cnpj || '',
+    stateRegistration: settings.stateRegistration || '',
+    legalName: settings.legalName || '',
+    tradeName: settings.tradeName || '',
+    taxRegime: settings.taxRegime || 'simples',
+    cscId: settings.cscId || '',
+    hasCsc: Boolean(settings.csc),
+    certificatePath: settings.certificatePath || '',
+    hasCertificatePassword: Boolean(settings.certificatePassword),
+    autoIssueOnPayment: Number(settings.autoIssueOnPayment || 0),
+    autoPrintOnAuthorization: Number(settings.autoPrintOnAuthorization || 0),
+    createdAt: settings.createdAt,
+    updatedAt: settings.updatedAt,
+  };
+};
+
+const ensureFiscalSettings = (estId) => {
+  let settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+  if (settings) return settings;
+
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO fiscal_settings (
+      establishmentId, enabled, environment, documentModel, serie, nextNumber,
+      taxRegime, autoIssueOnPayment, autoPrintOnAuthorization, createdAt, updatedAt
+    ) VALUES (?, 0, 'homologation', '65', '1', 1, 'simples', 0, 0, ?, ?)
+  `).run(estId, now, now);
+  return db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+};
+
+const getFiscalReadiness = (settings) => {
+  const missing = [];
+  if (!settings?.enabled) missing.push('Modulo fiscal desativado');
+  if (!settings?.cnpj) missing.push('CNPJ');
+  if (!settings?.stateRegistration) missing.push('Inscricao estadual');
+  if (!settings?.legalName) missing.push('Razao social');
+  if (!settings?.cscId) missing.push('ID CSC');
+  if (!settings?.csc) missing.push('CSC');
+  if (!settings?.certificatePath) missing.push('Certificado digital A1');
+  if (!settings?.certificatePassword) missing.push('Senha do certificado');
+  return {
+    ready: missing.length === 0,
+    missing,
+  };
+};
+
+const upsertFiscalDocumentForSale = (saleId, estId, options = {}) => {
+  const existing = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
+    .get(saleId, estId);
+  if (existing) return existing;
+
+  const settings = ensureFiscalSettings(estId);
+  const readiness = getFiscalReadiness(settings);
+  const now = new Date().toISOString();
+  const id = uuidv4();
+  const shouldQueue = options.force || (settings.enabled && settings.autoIssueOnPayment);
+  const status = readiness.ready && shouldQueue ? 'pending_authorization' : 'pending_configuration';
+  const error = readiness.ready
+    ? 'Motor fiscal aguardando implementacao de assinatura XML e webservice SEFAZ.'
+    : `Configuracao fiscal incompleta: ${readiness.missing.join(', ')}.`;
+  const number = readiness.ready && shouldQueue ? settings.nextNumber : null;
+
+  db.prepare(`
+    INSERT INTO fiscal_documents (
+      id, establishmentId, saleId, model, serie, number, environment, status,
+      error, createdAt, updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    estId,
+    saleId,
+    settings.documentModel || '65',
+    settings.serie || '1',
+    number,
+    settings.environment || 'homologation',
+    status,
+    error,
+    now,
+    now
+  );
+
+  if (number) {
+    db.prepare('UPDATE fiscal_settings SET nextNumber = nextNumber + 1, updatedAt = ? WHERE establishmentId = ?')
+      .run(now, estId);
+  }
+
+  db.prepare('UPDATE sales SET fiscalStatus = ? WHERE id = ? AND establishmentId = ?')
+    .run(status, saleId, estId);
+
+  return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(id);
+};
+
 const validateSaleItemsForTenant = (items, estId) => {
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error('Itens da venda sao obrigatorios.');
@@ -230,6 +331,10 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
     }
   });
   insertSale();
+  const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+  if (settings?.enabled && settings?.autoIssueOnPayment) {
+    upsertFiscalDocumentForSale(saleId, estId);
+  }
   return saleId;
 };
 
@@ -738,6 +843,145 @@ app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
       ...sale,
       items: db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(sale.id),
     })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==============================
+// FISCAL - NFC-e GO
+// ==============================
+app.get('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Configuracao fiscal pertence a um estabelecimento.' });
+    const settings = ensureFiscalSettings(req.user.establishmentId);
+    res.json({
+      settings: sanitizeFiscalSettings(settings),
+      readiness: getFiscalReadiness(settings),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Configuracao fiscal pertence a um estabelecimento.' });
+    const estId = req.user.establishmentId;
+    ensureFiscalSettings(estId);
+
+    const {
+      enabled, environment, serie, nextNumber, cnpj, stateRegistration, legalName, tradeName,
+      taxRegime, cscId, csc, certificatePath, certificatePassword,
+      autoIssueOnPayment, autoPrintOnAuthorization,
+    } = req.body;
+
+    const normalizedEnvironment = environment === 'production' ? 'production' : 'homologation';
+    const normalizedTaxRegime = ['simples', 'normal'].includes(taxRegime) ? taxRegime : 'simples';
+    const safeSerie = String(serie || '1').trim();
+    const safeNextNumber = Math.max(1, Number.parseInt(nextNumber, 10) || 1);
+    const now = new Date().toISOString();
+    const current = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+
+    db.prepare(`
+      UPDATE fiscal_settings
+      SET enabled = ?, environment = ?, documentModel = '65', serie = ?, nextNumber = ?,
+          cnpj = ?, stateRegistration = ?, legalName = ?, tradeName = ?, taxRegime = ?,
+          cscId = ?, csc = ?, certificatePath = ?, certificatePassword = ?,
+          autoIssueOnPayment = ?, autoPrintOnAuthorization = ?, updatedAt = ?
+      WHERE establishmentId = ?
+    `).run(
+      enabled ? 1 : 0,
+      normalizedEnvironment,
+      safeSerie,
+      safeNextNumber,
+      cnpj || null,
+      stateRegistration || null,
+      legalName || null,
+      tradeName || null,
+      normalizedTaxRegime,
+      cscId || null,
+      csc === undefined ? current.csc : (csc ? encodeCredentials({ value: csc }) : null),
+      certificatePath || null,
+      certificatePassword === undefined ? current.certificatePassword : (certificatePassword ? encodeCredentials({ value: certificatePassword }) : null),
+      autoIssueOnPayment ? 1 : 0,
+      autoPrintOnAuthorization ? 1 : 0,
+      now,
+      estId
+    );
+
+    const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    res.json({
+      settings: sanitizeFiscalSettings(settings),
+      readiness: getFiscalReadiness(settings),
+      message: 'Configuracao fiscal salva.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/fiscal/documents', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documentos fiscais pertencem a um estabelecimento.' });
+    const status = req.query.status ? String(req.query.status) : null;
+    const params = [req.user.establishmentId];
+    let where = 'fd.establishmentId = ?';
+    if (status) {
+      where += ' AND fd.status = ?';
+      params.push(status);
+    }
+
+    const documents = db.prepare(`
+      SELECT fd.*, s.totalAmount, s.paymentMethod, s.createdAt as saleCreatedAt
+      FROM fiscal_documents fd
+      INNER JOIN sales s ON s.id = fd.saleId
+      WHERE ${where}
+      ORDER BY fd.createdAt DESC
+      LIMIT 100
+    `).all(...params);
+    res.json(documents);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/fiscal/sales/:saleId', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
+    const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
+    if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
+    const document = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(req.params.saleId, req.user.establishmentId);
+    res.json({ sale, document });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
+    const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
+    if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
+    const document = upsertFiscalDocumentForSale(req.params.saleId, req.user.establishmentId, { force: true });
+    res.status(201).json(document);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/fiscal/documents/:id/printed', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      UPDATE fiscal_documents
+      SET printedAt = ?, updatedAt = ?
+      WHERE id = ? AND establishmentId = ? AND status = 'authorized'
+    `).run(now, now, req.params.id, req.user.establishmentId);
+    if (!result.changes) return res.status(400).json({ error: 'Documento nao autorizado ou nao encontrado.' });
+    res.json({ message: 'Documento marcado como impresso.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
