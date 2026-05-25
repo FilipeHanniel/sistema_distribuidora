@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { CheckCircle2, Loader2, CreditCard, Banknote, QrCode, X } from 'lucide-react';
+import type { SaleItem } from '../types';
 import './SaleSuccessPopup.css';
 
 interface SaleSuccessPopupProps {
@@ -7,6 +8,7 @@ interface SaleSuccessPopupProps {
   paymentMethod: 'money' | 'card' | 'pix';
   operatorName: string;
   saleId: string;
+  items: SaleItem[];
   onClose: () => void;
 }
 
@@ -50,7 +52,7 @@ function playSuccessSound() {
   }
 }
 
-export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorName, saleId, onClose }: SaleSuccessPopupProps) {
+export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorName, saleId, items, onClose }: SaleSuccessPopupProps) {
   const isMachine = paymentMethod === 'card' || paymentMethod === 'pix';
   const [status, setStatus] = useState<'processing' | 'done'>(isMachine ? 'processing' : 'done');
   const [countdown, setCountdown] = useState(5);
@@ -148,6 +150,30 @@ export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorN
           <span className="sale-popup__op">Operador: <strong>{operatorName}</strong></span>
           <span className="sale-popup__id">#{saleId.slice(0, 8).toUpperCase()}</span>
         </div>
+
+        {status === 'done' && (
+          <div className="sale-popup__receipt">
+            <div className="sale-popup__receipt-title">
+              <strong>Cupom digital</strong>
+              <span>Recibo interno sem valor fiscal</span>
+            </div>
+            <div className="sale-popup__receipt-items">
+              {items.length === 0 ? (
+                <div className="sale-popup__receipt-empty">Itens indisponiveis nesta visualizacao.</div>
+              ) : items.map(item => (
+                <div className="sale-popup__receipt-item" key={item.productId}>
+                  <span>{item.quantity}x {item.name}</span>
+                  <strong>{formatCurrency(item.totalPrice)}</strong>
+                  <small>{formatCurrency(item.unitPrice)} / un</small>
+                </div>
+              ))}
+            </div>
+            <div className="sale-popup__receipt-total">
+              <span>Total</span>
+              <strong>{formatCurrency(totalAmount)}</strong>
+            </div>
+          </div>
+        )}
       </div>
 
       {status === 'done' && (

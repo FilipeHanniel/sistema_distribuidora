@@ -349,6 +349,7 @@ export default function AppLayout() {
             paymentMethod={lastSale.method}
             operatorName={user?.name ?? 'Operador'}
             saleId={lastSale.id}
+            items={lastSale.items}
             onClose={closeSuccessPopup}
           />
         )}

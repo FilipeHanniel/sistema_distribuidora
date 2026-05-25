@@ -118,7 +118,7 @@ export interface FiscalSettings {
   stateRegistration: string;
   legalName: string;
   tradeName: string;
-  taxRegime: 'simples' | 'normal';
+  taxRegime: 'mei' | 'simples' | 'normal';
   cscId: string;
   hasCsc: boolean;
   certificatePath: string;

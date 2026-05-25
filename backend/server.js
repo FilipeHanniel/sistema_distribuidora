@@ -954,7 +954,7 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
 
     const normalizedEnvironment = environment === 'production' ? 'production' : 'homologation';
     const normalizedProviderMode = providerMode === 'sefaz_go' ? 'sefaz_go' : 'simulated';
-    const normalizedTaxRegime = ['simples', 'normal'].includes(taxRegime) ? taxRegime : 'simples';
+    const normalizedTaxRegime = ['mei', 'simples', 'normal'].includes(taxRegime) ? taxRegime : 'simples';
     const safeSerie = String(serie || '1').trim();
     const safeNextNumber = Math.max(1, Number.parseInt(nextNumber, 10) || 1);
     const now = new Date().toISOString();

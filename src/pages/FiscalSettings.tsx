@@ -21,7 +21,7 @@ const emptySettings: FiscalSettingsType = {
   stateRegistration: '',
   legalName: '',
   tradeName: '',
-  taxRegime: 'simples',
+  taxRegime: 'mei',
   cscId: '',
   hasCsc: false,
   certificatePath: '',
@@ -37,6 +37,21 @@ const statusLabels: Record<string, string> = {
   rejected: 'Rejeitada',
   cancelled: 'Cancelada',
 };
+
+type FiscalValidationMessage = {
+  code: string;
+  message: string;
+};
+
+function parseValidationMessages(value?: string): FiscalValidationMessage[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function FiscalSettings() {
   const [form, setForm] = useState(emptySettings);
@@ -165,6 +180,7 @@ export default function FiscalSettings() {
               <div className="form-group">
                 <label>Regime tributario</label>
                 <select className="form-control" value={form.taxRegime} onChange={e => update('taxRegime', e.target.value as FiscalSettingsType['taxRegime'])}>
+                  <option value="mei">MEI</option>
                   <option value="simples">Simples Nacional</option>
                   <option value="normal">Regime normal</option>
                 </select>
@@ -256,24 +272,35 @@ export default function FiscalSettings() {
               <div className="fiscal-empty compact">Nenhum documento fiscal preparado.</div>
             ) : (
               <div className="fiscal-doc-list">
-                {documents.map(doc => (
-                  <div className="fiscal-doc-item" key={doc.id}>
-                    <div>
-                      <strong>Venda {doc.saleId.slice(0, 8)}</strong>
-                      <span>{statusLabels[doc.status] || doc.status}</span>
+                {documents.map(doc => {
+                  const messages = parseValidationMessages(doc.validationMessages);
+                  return (
+                    <div className={`fiscal-doc-item ${doc.status}`} key={doc.id}>
+                      <div>
+                        <strong>Venda {doc.saleId.slice(0, 8)}</strong>
+                        <span>{statusLabels[doc.status] || doc.status}</span>
+                      </div>
+                      <div>
+                        <strong>{Number(doc.totalAmount || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                        <span>{new Date(doc.saleCreatedAt || doc.createdAt).toLocaleString('pt-BR')}</span>
+                      </div>
+                      {doc.error && <small>{doc.error}</small>}
+                      {messages.length > 0 && (
+                        <div className="fiscal-validation-list">
+                          <strong>Corrija antes de emitir:</strong>
+                          {messages.map((msg, index) => (
+                            <span key={`${msg.code}-${index}`}>{msg.code}: {msg.message}</span>
+                          ))}
+                        </div>
+                      )}
+                      {doc.status !== 'authorized' && (
+                        <button className="btn btn-secondary btn-sm" onClick={() => issueDocument(doc)}>
+                          Emitir simulado
+                        </button>
+                      )}
                     </div>
-                    <div>
-                      <strong>{Number(doc.totalAmount || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
-                      <span>{new Date(doc.saleCreatedAt || doc.createdAt).toLocaleString('pt-BR')}</span>
-                    </div>
-                    {doc.error && <small>{doc.error}</small>}
-                    {doc.status !== 'authorized' && (
-                      <button className="btn btn-secondary btn-sm" onClick={() => issueDocument(doc)}>
-                        Emitir simulado
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
