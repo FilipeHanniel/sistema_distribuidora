@@ -1,8 +1,60 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.SEFAZ_FAKE_PORT || 4001);
 const HOST = process.env.SEFAZ_FAKE_HOST || '127.0.0.1';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOG_DIR = process.env.SEFAZ_FAKE_LOG_DIR || path.join(__dirname, 'logs');
+const XML_DIR = path.join(LOG_DIR, 'xml');
+const INDEX_FILE = path.join(LOG_DIR, 'requests.jsonl');
+
+const ensureLogDirs = () => {
+  fs.mkdirSync(XML_DIR, { recursive: true });
+};
+
+const safeTimestamp = () => new Date().toISOString().replace(/[:.]/g, '-');
+
+const getLastTag = (xml, tag) => {
+  const matches = [...String(xml || '').matchAll(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi'))];
+  return matches.length ? matches[matches.length - 1][1].trim() : '';
+};
+
+const endpointName = (url = '') => {
+  if (url.includes('autorizacao')) return 'autorizacao';
+  if (url.includes('consulta')) return 'consulta';
+  if (url.includes('cancelamento')) return 'cancelamento';
+  if (url.includes('inutilizacao')) return 'inutilizacao';
+  return 'desconhecido';
+};
+
+const writeExchangeLog = ({ req, requestXml, responseXml, statusCode = 200 }) => {
+  ensureLogDirs();
+  const stamp = safeTimestamp();
+  const endpoint = endpointName(req.url);
+  const id = `${stamp}_${endpoint}_${crypto.randomBytes(3).toString('hex')}`;
+  const requestFile = path.join(XML_DIR, `${id}_request.xml`);
+  const responseFile = path.join(XML_DIR, `${id}_response.xml`);
+
+  fs.writeFileSync(requestFile, requestXml || '', 'utf8');
+  fs.writeFileSync(responseFile, responseXml || '', 'utf8');
+
+  const entry = {
+    id,
+    createdAt: new Date().toISOString(),
+    method: req.method,
+    endpoint: req.url,
+    statusCode,
+    cStat: getLastTag(responseXml, 'cStat') || null,
+    xMotivo: getLastTag(responseXml, 'xMotivo') || null,
+    chNFe: getLastTag(responseXml, 'chNFe') || getLastTag(requestXml, 'chNFe') || null,
+    requestXml: path.relative(LOG_DIR, requestFile).replace(/\\/g, '/'),
+    responseXml: path.relative(LOG_DIR, responseFile).replace(/\\/g, '/'),
+  };
+  fs.appendFileSync(INDEX_FILE, `${JSON.stringify(entry)}\n`, 'utf8');
+};
 
 const readBody = (req) => new Promise((resolve, reject) => {
   let body = '';
@@ -130,11 +182,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    writeExchangeLog({ req, requestXml: body, responseXml: response, statusCode: 200 });
     res.writeHead(200, { 'Content-Type': 'application/soap+xml; charset=utf-8' });
     res.end(response);
   } catch (err) {
+    const response = soapResponse(`<retErro><cStat>999</cStat><xMotivo>${err.message}</xMotivo></retErro>`);
+    try {
+      writeExchangeLog({ req, requestXml: '', responseXml: response, statusCode: 500 });
+    } catch {}
     res.writeHead(500, { 'Content-Type': 'application/soap+xml; charset=utf-8' });
-    res.end(soapResponse(`<retErro><cStat>999</cStat><xMotivo>${err.message}</xMotivo></retErro>`));
+    res.end(response);
   }
 });
 
