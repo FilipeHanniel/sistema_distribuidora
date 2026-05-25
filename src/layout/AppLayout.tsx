@@ -350,6 +350,7 @@ export default function AppLayout() {
             operatorName={user?.name ?? 'Operador'}
             saleId={lastSale.id}
             items={lastSale.items}
+            createdAt={lastSale.createdAt}
             onClose={closeSuccessPopup}
           />
         )}

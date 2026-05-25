@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, type ReactNode } from 'react';
-import { Receipt, Banknote, CreditCard, QrCode, CalendarRange, ChevronDown, ChevronUp, TrendingUp, Download, Printer } from 'lucide-react';
+import { Receipt, Banknote, CreditCard, QrCode, CalendarRange, ChevronDown, ChevronUp, TrendingUp, Download, Printer, Eye } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { useSalesStore } from '../store/useSalesStore';
 import { useAuthStore } from '../store/useAuthStore';
-import type { Sale } from '../types';
+import SaleSuccessPopup from '../components/SaleSuccessPopup';
+import type { FiscalDocument, Sale } from '../types';
 import './SalesHistory.css';
 
 const METHOD_ICONS: Record<string, ReactNode> = {
@@ -35,6 +36,7 @@ export default function SalesHistory() {
   const [searchDate, setSearchDate] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [todaySales, setTodaySales] = useState<Sale[]>([]);
+  const [receiptPreview, setReceiptPreview] = useState<{ sale: Sale; fiscalDocument?: FiscalDocument | null } | null>(null);
 
   const operador = isOperador();
 
@@ -60,6 +62,15 @@ export default function SalesHistory() {
   }, [sourceSales, searchDate, operador]);
 
   const totalRevenue = filtered.reduce((acc, s) => acc + s.totalAmount, 0);
+
+  const openReceiptPreview = async (sale: Sale) => {
+    try {
+      const fiscal = await apiRequest<{ sale: Sale; document?: FiscalDocument | null }>(`/fiscal/sales/${sale.id}`);
+      setReceiptPreview({ sale, fiscalDocument: fiscal.document || null });
+    } catch {
+      setReceiptPreview({ sale, fiscalDocument: null });
+    }
+  };
 
   // ---- Exportar CSV ----
   const exportCSV = () => {
@@ -251,6 +262,9 @@ export default function SalesHistory() {
                     </div>
                   </div>
                   <div className="receipt-right">
+                    <button className="receipt-view-btn" onClick={(e) => { e.stopPropagation(); openReceiptPreview(sale); }}>
+                      <Eye size={15} /> Ver
+                    </button>
                     <span className="receipt-method-label">
                       {METHOD_LABELS[sale.paymentMethod] ?? sale.paymentMethod}
                     </span>
@@ -295,6 +309,21 @@ export default function SalesHistory() {
           })
         )}
       </div>
+
+      {receiptPreview && (
+        <SaleSuccessPopup
+          totalAmount={receiptPreview.sale.totalAmount}
+          paymentMethod={receiptPreview.sale.paymentMethod}
+          operatorName="Historico"
+          saleId={receiptPreview.sale.id}
+          items={receiptPreview.sale.items || []}
+          createdAt={receiptPreview.sale.createdAt}
+          fiscalDocument={receiptPreview.fiscalDocument}
+          autoClose={false}
+          showProcessing={false}
+          onClose={() => setReceiptPreview(null)}
+        />
+      )}
     </div>
   );
 }

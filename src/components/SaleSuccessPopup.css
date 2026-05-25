@@ -147,6 +147,12 @@
   overflow-y: auto;
 }
 
+.sale-popup__header-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
 .sale-popup__amount {
   font-size: 2.25rem;
   font-weight: 900;
@@ -290,6 +296,29 @@
   justify-content: space-between;
   padding-top: 0.65rem;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.sale-popup__fiscal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+}
+
+.sale-popup__fiscal span {
+  color: #bbf7d0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.sale-popup__fiscal strong,
+.sale-popup__fiscal small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  word-break: break-word;
 }
 
 /* --- Progress bar (auto-close timer) --- */

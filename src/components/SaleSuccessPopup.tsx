@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react';
-import { CheckCircle2, Loader2, CreditCard, Banknote, QrCode, X } from 'lucide-react';
-import type { SaleItem } from '../types';
+import { CheckCircle2, Loader2, CreditCard, Banknote, QrCode, X, Pause, Play } from 'lucide-react';
+import type { FiscalDocument, SaleItem } from '../types';
 import './SaleSuccessPopup.css';
 
 interface SaleSuccessPopupProps {
@@ -9,6 +9,10 @@ interface SaleSuccessPopupProps {
   operatorName: string;
   saleId: string;
   items: SaleItem[];
+  createdAt?: string;
+  fiscalDocument?: FiscalDocument | null;
+  autoClose?: boolean;
+  showProcessing?: boolean;
   onClose: () => void;
 }
 
@@ -52,17 +56,37 @@ function playSuccessSound() {
   }
 }
 
-export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorName, saleId, items, onClose }: SaleSuccessPopupProps) {
-  const isMachine = paymentMethod === 'card' || paymentMethod === 'pix';
+const FISCAL_LABELS: Record<string, string> = {
+  pending_configuration: 'Fiscal pendente',
+  pending_authorization: 'Aguardando autorizacao',
+  authorized: 'Fiscal autorizada',
+  rejected: 'Fiscal rejeitada',
+  cancelled: 'Fiscal cancelada',
+};
+
+export default function SaleSuccessPopup({
+  totalAmount,
+  paymentMethod,
+  operatorName,
+  saleId,
+  items,
+  createdAt,
+  fiscalDocument,
+  autoClose = true,
+  showProcessing = true,
+  onClose,
+}: SaleSuccessPopupProps) {
+  const isMachine = showProcessing && (paymentMethod === 'card' || paymentMethod === 'pix');
   const [status, setStatus] = useState<'processing' | 'done'>(isMachine ? 'processing' : 'done');
   const [countdown, setCountdown] = useState(5);
+  const [paused, setPaused] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
 
-  const now = new Date();
+  const now = createdAt ? new Date(createdAt) : new Date();
   const dateLabel = now.toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
@@ -83,7 +107,7 @@ export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorN
 
   // Auto-close countdown (starts only when done)
   useEffect(() => {
-    if (status !== 'done') return;
+    if (status !== 'done' || paused || !autoClose) return;
 
     countdownRef.current = setInterval(() => {
       setCountdown(prev => {
@@ -103,12 +127,23 @@ export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorN
       clearInterval(countdownRef.current!);
       clearTimeout(timerRef.current!);
     };
-  }, [status, onClose]);
+  }, [status, paused, autoClose, onClose]);
 
   const handleClose = () => {
     clearTimeout(timerRef.current!);
     clearInterval(countdownRef.current!);
     onClose();
+  };
+
+  const togglePaused = () => {
+    if (paused) {
+      setCountdown(5);
+      setPaused(false);
+      return;
+    }
+    clearTimeout(timerRef.current!);
+    clearInterval(countdownRef.current!);
+    setPaused(true);
   };
 
   return (
@@ -127,10 +162,17 @@ export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorN
           </span>
           <span className="sale-popup__date">{dateLabel}</span>
         </div>
-        <button className="sale-popup__close" onClick={handleClose} title="Fechar">
-          <X size={18} />
-          {status === 'done' && <span className="sale-popup__countdown">{countdown}s</span>}
-        </button>
+        <div className="sale-popup__header-actions">
+          {status === 'done' && autoClose && (
+            <button className="sale-popup__close" onClick={togglePaused} title={paused ? 'Retomar fechamento automatico' : 'Pausar fechamento automatico'}>
+              {paused ? <Play size={17} /> : <Pause size={17} />}
+              <span className="sale-popup__countdown">{paused ? 'pause' : `${countdown}s`}</span>
+            </button>
+          )}
+          <button className="sale-popup__close" onClick={handleClose} title="Fechar">
+            <X size={18} />
+          </button>
+        </div>
       </div>
 
       <div className="sale-popup__body">
@@ -172,11 +214,19 @@ export default function SaleSuccessPopup({ totalAmount, paymentMethod, operatorN
               <span>Total</span>
               <strong>{formatCurrency(totalAmount)}</strong>
             </div>
+            {fiscalDocument && (
+              <div className="sale-popup__fiscal">
+                <span>{FISCAL_LABELS[fiscalDocument.status] || fiscalDocument.status}</span>
+                {fiscalDocument.accessKey && <strong>Chave: {fiscalDocument.accessKey}</strong>}
+                {fiscalDocument.protocol && <strong>Protocolo: {fiscalDocument.protocol}</strong>}
+                {fiscalDocument.error && <small>{fiscalDocument.error}</small>}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {status === 'done' && (
+      {status === 'done' && autoClose && !paused && (
         <div className="sale-popup__progress">
           <div className="sale-popup__progress-bar" style={{ animationDuration: '5s' }} />
         </div>

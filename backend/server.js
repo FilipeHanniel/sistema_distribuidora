@@ -1024,9 +1024,8 @@ app.get('/api/fiscal/documents', authenticateToken, isGestorOrAbove, (req, res) 
   }
 });
 
-app.get('/api/fiscal/sales/:saleId', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/fiscal/sales/:saleId', authenticateToken, isTenantUser, (req, res) => {
   try {
-    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
     const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
     if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
     const document = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')

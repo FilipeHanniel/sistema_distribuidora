@@ -61,6 +61,7 @@ export default function FiscalSettings() {
   const [documents, setDocuments] = useState<FiscalDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | FiscalDocument['status']>('all');
 
   const loadData = async () => {
     setLoading(true);
@@ -125,6 +126,17 @@ export default function FiscalSettings() {
     setForm(prev => ({ ...prev, [key]: value }));
   };
 
+  const filteredDocuments = statusFilter === 'all'
+    ? documents
+    : documents.filter(doc => doc.status === statusFilter);
+
+  const statusCounters = documents.reduce<Record<string, number>>((acc, doc) => {
+    acc[doc.status] = (acc[doc.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  const fiscalEnabled = Boolean(form.enabled);
+
   return (
     <div className="page-container fiscal-page">
       <div className="fiscal-header">
@@ -135,12 +147,18 @@ export default function FiscalSettings() {
         <button className="btn btn-secondary" onClick={loadData}><RefreshCw size={16} /> Atualizar</button>
       </div>
 
-      <div className={`fiscal-status ${readiness.ready ? 'ready' : 'pending'}`}>
-        {readiness.ready ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+      <div className={`fiscal-status ${!fiscalEnabled ? 'disabled' : readiness.ready ? 'ready' : 'pending'}`}>
+        {!fiscalEnabled ? <FileText size={18} /> : readiness.ready ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
         <div>
-          <strong>{readiness.ready ? 'Cadastro pronto para a proxima etapa tecnica' : 'Ainda faltam dados fiscais'}</strong>
+          <strong>
+            {!fiscalEnabled
+              ? 'Modulo fiscal desativado para este estabelecimento'
+              : readiness.ready ? 'Cadastro pronto para a proxima etapa tecnica' : 'Ainda faltam dados fiscais'}
+          </strong>
           <span>
-            {readiness.ready
+            {!fiscalEnabled
+              ? 'O sistema seguira funcionando apenas com estoque, vendas e comprovantes internos.'
+              : readiness.ready
               ? 'Agora falta ligar o motor de XML assinado e autorizacao SEFAZ.'
               : readiness.missing.join(', ') || 'Revise as configuracoes.'}
           </span>
@@ -266,13 +284,36 @@ export default function FiscalSettings() {
           <div className="fiscal-panel">
             <div className="fiscal-section-title">
               <FileText size={18} />
-              <span>Ultimos documentos</span>
+              <span>Fila fiscal</span>
             </div>
-            {documents.length === 0 ? (
-              <div className="fiscal-empty compact">Nenhum documento fiscal preparado.</div>
+
+            <div className="fiscal-queue-tabs">
+              {[
+                ['all', 'Todos', documents.length],
+                ['pending_configuration', 'Pendentes', statusCounters.pending_configuration || 0],
+                ['pending_authorization', 'Autorizar', statusCounters.pending_authorization || 0],
+                ['rejected', 'Rejeitados', statusCounters.rejected || 0],
+                ['authorized', 'Autorizados', statusCounters.authorized || 0],
+              ].map(([key, label, count]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={statusFilter === key ? 'active' : ''}
+                  onClick={() => setStatusFilter(key as typeof statusFilter)}
+                >
+                  <span>{label}</span>
+                  <strong>{count}</strong>
+                </button>
+              ))}
+            </div>
+
+            {!fiscalEnabled ? (
+              <div className="fiscal-empty compact">A fila fiscal fica disponivel quando o modulo fiscal estiver ativo.</div>
+            ) : filteredDocuments.length === 0 ? (
+              <div className="fiscal-empty compact">Nenhum documento neste filtro.</div>
             ) : (
               <div className="fiscal-doc-list">
-                {documents.map(doc => {
+                {filteredDocuments.map(doc => {
                   const messages = parseValidationMessages(doc.validationMessages);
                   return (
                     <div className={`fiscal-doc-item ${doc.status}`} key={doc.id}>
