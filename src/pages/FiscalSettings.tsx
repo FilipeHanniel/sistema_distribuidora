@@ -38,6 +38,8 @@ const statusLabels: Record<string, string> = {
   cancelled: 'Cancelada',
 };
 
+const formatAccessKey = (key?: string) => key ? key.replace(/(.{4})/g, '$1 ').trim() : '';
+
 type FiscalValidationMessage = {
   code: string;
   message: string;
@@ -326,6 +328,13 @@ export default function FiscalSettings() {
                         <span>{new Date(doc.saleCreatedAt || doc.createdAt).toLocaleString('pt-BR')}</span>
                       </div>
                       {doc.error && <small>{doc.error}</small>}
+                      {(doc.cStat || doc.accessKey || doc.protocol) && (
+                        <div className="fiscal-return-box">
+                          {doc.cStat && <span>cStat: <strong>{doc.cStat}</strong></span>}
+                          {doc.protocol && <span>Protocolo: <strong>{doc.protocol}</strong></span>}
+                          {doc.accessKey && <span>Chave: <strong>{formatAccessKey(doc.accessKey)}</strong></span>}
+                        </div>
+                      )}
                       {messages.length > 0 && (
                         <div className="fiscal-validation-list">
                           <strong>Corrija antes de emitir:</strong>

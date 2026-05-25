@@ -335,7 +335,7 @@ const issueFiscalDocument = (documentId, estId) => {
   const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(document.saleId, estId);
   if (!sale) throw new Error('Venda do documento fiscal nao encontrada.');
   const items = db.prepare(`
-    SELECT si.*, p.ncm, p.cfop, p.csosn, p.cst, p.fiscalUnit, p.origin, p.taxRate
+    SELECT si.*, p.barcode, p.ncm, p.cfop, p.csosn, p.cst, p.fiscalUnit, p.origin, p.taxRate
     FROM sale_items si
     LEFT JOIN products p ON p.id = si.productId AND p.establishmentId = ?
     WHERE si.saleId = ?
@@ -345,11 +345,12 @@ const issueFiscalDocument = (documentId, estId) => {
   const now = new Date().toISOString();
   db.prepare(`
     UPDATE fiscal_documents
-    SET status = ?, accessKey = ?, protocol = ?, qrCodeUrl = ?, xml = ?,
+    SET status = ?, cStat = ?, accessKey = ?, protocol = ?, qrCodeUrl = ?, xml = ?,
         validationMessages = ?, error = ?, authorizedAt = ?, updatedAt = ?
     WHERE id = ? AND establishmentId = ?
   `).run(
     result.status,
+    result.cStat || null,
     result.accessKey || null,
     result.protocol || null,
     result.qrCodeUrl || null,

@@ -138,6 +138,7 @@ export interface FiscalDocument {
   number?: number;
   environment: 'homologation' | 'production';
   status: 'pending_configuration' | 'pending_authorization' | 'authorized' | 'rejected' | 'cancelled';
+  cStat?: string;
   accessKey?: string;
   protocol?: string;
   qrCodeUrl?: string;

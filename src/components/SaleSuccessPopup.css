@@ -321,6 +321,55 @@
   word-break: break-word;
 }
 
+.sale-popup__danfe {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.sale-popup__danfe-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.sale-popup__danfe-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.35rem;
+}
+
+.sale-popup__danfe-grid span {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.sale-popup__access-key {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.sale-popup__access-key strong {
+  font-family: monospace;
+  line-height: 1.45;
+}
+
+.sale-popup__qr {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.55rem;
+  align-items: center;
+  color: rgba(255, 255, 255, 0.7);
+}
+
 /* --- Progress bar (auto-close timer) --- */
 .sale-popup__progress {
   height: 4px;

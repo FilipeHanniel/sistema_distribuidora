@@ -1,6 +1,5 @@
 const crypto = require('crypto');
-
-const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
+const { buildNfceXml, onlyDigits } = require('./fiscalXmlBuilder');
 
 const makeAccessKey = (settings, document, sale) => {
   const cnpj = onlyDigits(settings.cnpj).padStart(14, '0').slice(0, 14);
@@ -28,36 +27,50 @@ const calculateCheckDigit = (base) => {
 
 const validateSettings = (settings) => {
   const errors = [];
-  if (!settings?.enabled) errors.push({ code: 'F001', message: 'Modulo fiscal desativado.' });
-  if (onlyDigits(settings?.cnpj).length !== 14) errors.push({ code: 'F002', message: 'CNPJ do emitente invalido ou ausente.' });
-  if (!settings?.stateRegistration) errors.push({ code: 'F003', message: 'Inscricao estadual ausente.' });
-  if (!settings?.legalName) errors.push({ code: 'F004', message: 'Razao social ausente.' });
-  if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F005', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
-  if (!settings?.certificatePath || !settings?.certificatePassword) errors.push({ code: 'F006', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
+  if (!settings?.enabled) errors.push({ code: 'F001', cStat: 'SIM-001', message: 'Modulo fiscal desativado.' });
+  if (onlyDigits(settings?.cnpj).length !== 14) errors.push({ code: 'F002', cStat: 'SIM-207', message: 'CNPJ do emitente invalido ou ausente.' });
+  if (!settings?.stateRegistration) errors.push({ code: 'F003', cStat: 'SIM-209', message: 'Inscricao estadual ausente.' });
+  if (!settings?.legalName) errors.push({ code: 'F004', cStat: 'SIM-203', message: 'Razao social ausente.' });
+  if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F005', cStat: 'SIM-395', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
+  if (!settings?.certificatePath || !settings?.certificatePassword) errors.push({ code: 'F006', cStat: 'SIM-280', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
   return errors;
 };
 
-const validateProducts = (items) => {
+const validateProducts = (items, settings = {}) => {
   const errors = [];
   for (const item of items) {
     const name = item.name || item.productName || item.productId;
-    if (!onlyDigits(item.ncm).match(/^\d{8}$/)) errors.push({ code: 'P001', message: `Produto "${name}" sem NCM valido de 8 digitos.` });
-    if (!onlyDigits(item.cfop).match(/^\d{4}$/)) errors.push({ code: 'P002', message: `Produto "${name}" sem CFOP valido de 4 digitos.` });
-    if (!item.fiscalUnit) errors.push({ code: 'P003', message: `Produto "${name}" sem unidade fiscal.` });
-    if (!item.origin) errors.push({ code: 'P004', message: `Produto "${name}" sem origem fiscal.` });
-    if (!item.csosn && !item.cst) errors.push({ code: 'P005', message: `Produto "${name}" sem CSOSN/CST.` });
+    if (!onlyDigits(item.ncm).match(/^\d{8}$/)) errors.push({ code: 'P001', cStat: 'SIM-778', message: `Produto "${name}" sem NCM valido de 8 digitos.` });
+    if (!onlyDigits(item.cfop).match(/^\d{4}$/)) errors.push({ code: 'P002', cStat: 'SIM-521', message: `Produto "${name}" sem CFOP valido de 4 digitos.` });
+    if (!item.fiscalUnit) errors.push({ code: 'P003', cStat: 'SIM-629', message: `Produto "${name}" sem unidade fiscal.` });
+    if (!String(item.origin || '').match(/^[0-8]$/)) errors.push({ code: 'P004', cStat: 'SIM-508', message: `Produto "${name}" sem origem fiscal valida.` });
+    if (settings.taxRegime === 'normal' && !item.cst) errors.push({ code: 'P005', cStat: 'SIM-528', message: `Produto "${name}" sem CST para regime normal.` });
+    if (settings.taxRegime !== 'normal' && !item.csosn) errors.push({ code: 'P006', cStat: 'SIM-600', message: `Produto "${name}" sem CSOSN para MEI/Simples Nacional.` });
   }
   return errors;
 };
 
+const validateTotals = (sale, items) => {
+  const itemsTotal = items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+  const saleTotal = Number(sale.totalAmount || 0);
+  if (Math.abs(itemsTotal - saleTotal) > 0.01) {
+    return [{
+      code: 'T001',
+      cStat: 'SIM-610',
+      message: `Total da venda (${saleTotal.toFixed(2)}) difere da soma dos itens (${itemsTotal.toFixed(2)}).`,
+    }];
+  }
+  return [];
+};
+
 class FakeSefazProvider {
   authorize({ settings, document, sale, items }) {
-    const errors = [...validateSettings(settings), ...validateProducts(items)];
+    const errors = [...validateSettings(settings), ...validateProducts(items, settings), ...validateTotals(sale, items)];
     if (errors.length) {
       return {
         status: 'rejected',
-        cStat: '999',
-        reason: 'Rejeicao simulada por inconsistencias fiscais.',
+        cStat: errors[0].cStat || 'SIM-999',
+        reason: `Rejeicao simulada: ${errors[0].message}`,
         validationMessages: errors,
       };
     }
@@ -65,6 +78,7 @@ class FakeSefazProvider {
     const accessKey = makeAccessKey(settings, document, sale);
     const protocol = `SIM${Date.now()}`;
     const qrCodeUrl = `https://homolog.sefaz.go.gov.br/nfce/qrcode?p=${accessKey}|2|${settings.environment}|${settings.cscId}`;
+    const xml = buildNfceXml({ settings, document, sale, items, accessKey, protocol, qrCodeUrl });
 
     return {
       status: 'authorized',
@@ -73,16 +87,7 @@ class FakeSefazProvider {
       accessKey,
       protocol,
       qrCodeUrl,
-      xml: [
-        '<NFe xmlns="http://www.portalfiscal.inf.br/nfe">',
-        `  <infNFe Id="NFe${accessKey}" versao="4.00">`,
-        `    <ide><mod>65</mod><serie>${document.serie || '1'}</serie><nNF>${document.number || 1}</nNF></ide>`,
-        `    <emit><CNPJ>${onlyDigits(settings.cnpj)}</CNPJ><xNome>${settings.legalName}</xNome></emit>`,
-        `    <total><ICMSTot><vNF>${Number(sale.totalAmount || 0).toFixed(2)}</vNF></ICMSTot></total>`,
-        '  </infNFe>',
-        `  <protNFe><infProt><chNFe>${accessKey}</chNFe><nProt>${protocol}</nProt><cStat>100</cStat></infProt></protNFe>`,
-        '</NFe>',
-      ].join('\n'),
+      xml,
       validationMessages: [],
     };
   }
@@ -97,4 +102,5 @@ module.exports = {
   getFiscalProvider,
   validateSettings,
   validateProducts,
+  validateTotals,
 };

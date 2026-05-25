@@ -43,13 +43,21 @@ Este projeto deve tratar a impressao fiscal automatica como emissao de NFC-e mod
 
 ## Simulador interno
 
-O `FakeSefazProvider` valida os cadastros e retorna autorizacao ou rejeicao simulada. Quando autorizado, gera chave de acesso fake no formato de 44 digitos, protocolo simulado, URL de QR Code simulada e XML simplificado para testes de fluxo.
+O `FakeSefazProvider` valida os cadastros e retorna autorizacao ou rejeicao simulada. Quando autorizado, gera chave de acesso fake no formato de 44 digitos, protocolo simulado, URL de QR Code simulada, cStat e XML NFC-e estruturado para testes de fluxo.
+
+As rejeicoes usam codigos internos com prefixo `SIM-` para lembrar que sao simuladas. Elas nao substituem os codigos oficiais da SEFAZ, mas aproximam o comportamento do sistema final: cada documento pode ficar autorizado, rejeitado, pendente de configuracao ou pendente de autorizacao.
 
 Ele nao substitui a homologacao oficial. Serve para deixar o produto pronto antes de termos CNPJ, IE, certificado digital e credenciamento real em Goias.
 
+## Estrutura para emissao propria
+
+- `fiscalProviders.js`: escolhe o provedor fiscal atual e contem o simulador.
+- `fiscalXmlBuilder.js`: monta a estrutura XML NFC-e base.
+- Futuro `SefazGoProvider`: deve assinar XML, validar schema, enviar para webservice, consultar recibo/protocolo, tratar rejeicoes reais e gravar XML autorizado.
+
 ## Proximas etapas tecnicas
 
-1. Escolher biblioteca/motor fiscal para gerar XML NFC-e, assinar com certificado A1 e validar schemas.
+1. Escolher biblioteca/motor para assinar XML NFC-e com certificado A1 e validar schemas.
 2. Mapear campos fiscais dos produtos: NCM, CFOP, CSOSN/CST, unidade, origem, aliquotas e beneficios fiscais quando aplicavel.
 3. Implementar webservices de autorizacao, consulta, cancelamento, inutilizacao e contingencia conforme ambiente GO.
 4. Gerar DANFE NFC-e e QR Code conforme manual nacional.

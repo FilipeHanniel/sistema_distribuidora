@@ -64,6 +64,11 @@ const FISCAL_LABELS: Record<string, string> = {
   cancelled: 'Fiscal cancelada',
 };
 
+const formatAccessKey = (key?: string) => {
+  if (!key) return '';
+  return key.replace(/(.{4})/g, '$1 ').trim();
+};
+
 export default function SaleSuccessPopup({
   totalAmount,
   paymentMethod,
@@ -217,7 +222,34 @@ export default function SaleSuccessPopup({
             {fiscalDocument && (
               <div className="sale-popup__fiscal">
                 <span>{FISCAL_LABELS[fiscalDocument.status] || fiscalDocument.status}</span>
-                {fiscalDocument.accessKey && <strong>Chave: {fiscalDocument.accessKey}</strong>}
+                {fiscalDocument.status === 'authorized' && (
+                  <div className="sale-popup__danfe">
+                    <div className="sale-popup__danfe-head">
+                      <strong>DANFE NFC-e simulado</strong>
+                      <small>Documento sem valor fiscal</small>
+                    </div>
+                    <div className="sale-popup__danfe-grid">
+                      <span>Modelo 65</span>
+                      <span>Serie {fiscalDocument.serie || '-'}</span>
+                      <span>Numero {fiscalDocument.number || '-'}</span>
+                      <span>cStat {fiscalDocument.cStat || '100'}</span>
+                    </div>
+                    {fiscalDocument.accessKey && (
+                      <div className="sale-popup__access-key">
+                        <small>Chave de acesso</small>
+                        <strong>{formatAccessKey(fiscalDocument.accessKey)}</strong>
+                      </div>
+                    )}
+                    {fiscalDocument.qrCodeUrl && (
+                      <div className="sale-popup__qr">
+                        <QrCode size={42} />
+                        <small>{fiscalDocument.qrCodeUrl}</small>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {fiscalDocument.accessKey && fiscalDocument.status !== 'authorized' && <strong>Chave: {formatAccessKey(fiscalDocument.accessKey)}</strong>}
+                {fiscalDocument.cStat && <strong>cStat: {fiscalDocument.cStat}</strong>}
                 {fiscalDocument.protocol && <strong>Protocolo: {fiscalDocument.protocol}</strong>}
                 {fiscalDocument.error && <small>{fiscalDocument.error}</small>}
               </div>

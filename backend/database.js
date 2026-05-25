@@ -223,6 +223,7 @@ const initDB = () => {
       number INTEGER,
       environment TEXT DEFAULT 'homologation',
       status TEXT DEFAULT 'pending_configuration',
+      cStat TEXT,
       accessKey TEXT,
       protocol TEXT,
       qrCodeUrl TEXT,
@@ -262,6 +263,7 @@ const initDB = () => {
     'ALTER TABLE payment_transactions ADD COLUMN payload TEXT',
     "ALTER TABLE fiscal_settings ADD COLUMN providerMode TEXT DEFAULT 'simulated'",
     'ALTER TABLE fiscal_documents ADD COLUMN validationMessages TEXT',
+    'ALTER TABLE fiscal_documents ADD COLUMN cStat TEXT',
   ];
   for (const sql of migrations) {
     try { db.prepare(sql).run(); } catch (e) {}
