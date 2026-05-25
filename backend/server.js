@@ -62,12 +62,13 @@ if (NODE_ENV === 'production') {
 // GEMINI AI
 // ==============================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 let genAI = null;
 let geminiModel = null;
 if (GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-  console.log('✅ Gemini AI configurado com sucesso!');
+  geminiModel = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  console.log(`✅ Gemini AI configurado com sucesso! Modelo: ${GEMINI_MODEL}`);
 } else {
   console.warn('⚠️ Gemini AI não configurado. Defina GEMINI_API_KEY no ambiente.');
 }
