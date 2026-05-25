@@ -22,6 +22,7 @@ backend/.env.*
 backend/node_modules
 backend/*.sqlite
 backend/*.sqlite-journal
+backend/certs/
 tools/sefaz-fake/logs/
 
 # Editor directories and files
