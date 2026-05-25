@@ -351,6 +351,7 @@ export default function AppLayout() {
             saleId={lastSale.id}
             items={lastSale.items}
             createdAt={lastSale.createdAt}
+            fiscalDocument={lastSale.fiscalDocument}
             onClose={closeSuccessPopup}
           />
         )}

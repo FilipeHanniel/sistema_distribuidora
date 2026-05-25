@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PixTransaction, Sale, SaleItem } from '../types';
+import type { FiscalDocument, PixTransaction, Sale, SaleItem } from '../types';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useInventoryStore } from './useInventoryStore';
 
@@ -11,6 +11,7 @@ interface LastSale {
   method: PaymentMethod;
   items: SaleItem[];
   createdAt: string;
+  fiscalDocument?: FiscalDocument | null;
 }
 
 interface SalesState {
@@ -23,7 +24,7 @@ interface SalesState {
   createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string) => Promise<PixTransaction | undefined>;
   checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   getSalesByDateRange: (startDate: Date, endDate: Date) => Sale[];
-  triggerSuccessPopup: (id: string, amount: number, method: PaymentMethod, items: SaleItem[]) => void;
+  triggerSuccessPopup: (id: string, amount: number, method: PaymentMethod, items: SaleItem[], fiscalDocument?: FiscalDocument | null) => void;
   closeSuccessPopup: () => void;
 }
 
@@ -33,8 +34,8 @@ export const useSalesStore = create<SalesState>((set, get) => ({
   showSuccessPopup: false,
   pendingPixItems: {},
 
-  triggerSuccessPopup: (id, amount, method, items) => {
-    set({ lastSale: { id, amount, method, items, createdAt: new Date().toISOString() }, showSuccessPopup: true });
+  triggerSuccessPopup: (id, amount, method, items, fiscalDocument = null) => {
+    set({ lastSale: { id, amount, method, items, fiscalDocument, createdAt: new Date().toISOString() }, showSuccessPopup: true });
   },
 
   closeSuccessPopup: () => {
@@ -52,13 +53,13 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 
   addSale: async (items, totalAmount, paymentMethod) => {
     try {
-      const data = await apiRequest<{ id: string }>('/sales', {
+      const data = await apiRequest<{ id: string; fiscalDocument?: FiscalDocument | null }>('/sales', {
         method: 'POST',
         body: { items, totalAmount, paymentMethod },
       });
       get().fetchSales();
       useInventoryStore.getState().fetchProducts();
-      get().triggerSuccessPopup(data.id, totalAmount, paymentMethod as PaymentMethod, items);
+      get().triggerSuccessPopup(data.id, totalAmount, paymentMethod as PaymentMethod, items, data.fiscalDocument || null);
       return data.id;
     } catch (err) {
       console.error('Falha ao efetivar venda no backend:', err);
@@ -89,7 +90,7 @@ export const useSalesStore = create<SalesState>((set, get) => ({
         get().fetchSales();
         useInventoryStore.getState().fetchProducts();
         const items = get().pendingPixItems[transactionId] || [];
-        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix', items);
+        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix', items, transaction.fiscalDocument || null);
         set(state => {
           const next = { ...state.pendingPixItems };
           delete next[transactionId];

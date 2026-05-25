@@ -82,6 +82,7 @@ export interface PixTransaction {
   id: string;
   status: 'pending' | 'paid' | 'cancelled' | 'expired';
   saleId?: string;
+  fiscalDocument?: FiscalDocument | null;
   paidAt?: string;
   amount: number;
   qrCode?: string;

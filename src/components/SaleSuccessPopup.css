@@ -41,6 +41,11 @@
   border-color: rgba(16, 185, 129, 0.4);
 }
 
+.sale-popup--warning {
+  background: linear-gradient(145deg, #7f1d1d, #991b1b);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
 /* --- Header --- */
 .sale-popup__header {
   display: flex;
@@ -67,6 +72,11 @@
 .sale-popup--done .sale-popup__icon-wrap {
   background: rgba(16, 185, 129, 0.2);
   color: #34d399;
+}
+
+.sale-popup--warning .sale-popup__icon-wrap {
+  background: rgba(248, 113, 113, 0.18);
+  color: #fecaca;
 }
 
 .sale-popup__spinner {
@@ -207,6 +217,12 @@
   background: rgba(16, 185, 129, 0.2);
   color: #6ee7b7;
   border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.sale-popup__badge.warning {
+  background: rgba(248, 113, 113, 0.18);
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.32);
 }
 
 .sale-popup__footer {

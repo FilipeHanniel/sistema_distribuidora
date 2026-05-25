@@ -396,14 +396,17 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
     }
   });
   insertSale();
+  let fiscalDocument = null;
   const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
   if (settings?.enabled && settings?.autoIssueOnPayment) {
     const document = upsertFiscalDocumentForSale(saleId, estId);
     if ((settings.providerMode || 'simulated') === 'simulated') {
-      issueFiscalDocument(document.id, estId);
+      fiscalDocument = issueFiscalDocument(document.id, estId);
+    } else {
+      fiscalDocument = document;
     }
   }
-  return saleId;
+  return { saleId, fiscalDocument };
 };
 
 const startOfLocalDay = (date = new Date()) => {
@@ -1224,8 +1227,12 @@ app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
 
   try {
     validateSaleItemsForTenant(items, estId);
-    createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
-    res.status(201).json({ id: saleId, message: 'Venda finalizada com sucesso!' });
+    const saleResult = createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
+    res.status(201).json({
+      id: saleResult.saleId,
+      fiscalDocument: saleResult.fiscalDocument,
+      message: 'Venda finalizada com sucesso!',
+    });
   } catch (err) {
     console.error('[Sale Error]', err.message);
     res.status(500).json({ error: err.message });
@@ -1327,15 +1334,21 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       const stored = JSON.parse(fresh.payload || '{}');
       const storedItems = stored.items || [];
       validateSaleItemsForTenant(storedItems, estId);
-      saleId = createPaidSale(storedItems, fresh.amount, 'pix', req.user.id, estId);
+      const saleResult = createPaidSale(storedItems, fresh.amount, 'pix', req.user.id, estId);
+      saleId = saleResult.saleId;
       db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
         .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
     }
+
+    const fiscalDocument = saleId
+      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(saleId, estId) || null
+      : null;
 
     res.json({
       id: transaction.id,
       status,
       saleId,
+      fiscalDocument,
       paidAt,
       amount: transaction.amount,
       qrCode: transaction.qrCode,
