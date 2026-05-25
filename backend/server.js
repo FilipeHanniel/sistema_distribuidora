@@ -400,7 +400,7 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
   const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
   if (settings?.enabled && settings?.autoIssueOnPayment) {
     const document = upsertFiscalDocumentForSale(saleId, estId);
-    if ((settings.providerMode || 'simulated') === 'simulated') {
+    if (['simulated', 'sefaz_go'].includes(settings.providerMode || 'simulated')) {
       fiscalDocument = issueFiscalDocument(document.id, estId);
     } else {
       fiscalDocument = document;
