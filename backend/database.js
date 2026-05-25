@@ -48,6 +48,13 @@ const initDB = () => {
       sellPrice REAL,
       stock INTEGER,
       category TEXT,
+      ncm TEXT,
+      cfop TEXT,
+      csosn TEXT,
+      cst TEXT,
+      fiscalUnit TEXT DEFAULT 'UN',
+      origin TEXT DEFAULT '0',
+      taxRate REAL DEFAULT 0,
       establishmentId TEXT,
       createdAt TEXT,
       updatedAt TEXT
@@ -184,6 +191,7 @@ const initDB = () => {
     CREATE TABLE IF NOT EXISTS fiscal_settings (
       establishmentId TEXT PRIMARY KEY,
       enabled INTEGER DEFAULT 0,
+      providerMode TEXT DEFAULT 'simulated',
       environment TEXT DEFAULT 'homologation',
       documentModel TEXT DEFAULT '65',
       serie TEXT DEFAULT '1',
@@ -219,6 +227,7 @@ const initDB = () => {
       protocol TEXT,
       qrCodeUrl TEXT,
       xml TEXT,
+      validationMessages TEXT,
       error TEXT,
       authorizedAt TEXT,
       printedAt TEXT,
@@ -237,6 +246,13 @@ const initDB = () => {
     'ALTER TABLE users ADD COLUMN isDeleted INTEGER DEFAULT 0',
     'ALTER TABLE users ADD COLUMN establishmentId TEXT',
     'ALTER TABLE products ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE products ADD COLUMN ncm TEXT',
+    'ALTER TABLE products ADD COLUMN cfop TEXT',
+    'ALTER TABLE products ADD COLUMN csosn TEXT',
+    'ALTER TABLE products ADD COLUMN cst TEXT',
+    "ALTER TABLE products ADD COLUMN fiscalUnit TEXT DEFAULT 'UN'",
+    "ALTER TABLE products ADD COLUMN origin TEXT DEFAULT '0'",
+    'ALTER TABLE products ADD COLUMN taxRate REAL DEFAULT 0',
     'ALTER TABLE sales ADD COLUMN paymentMethod TEXT',
     'ALTER TABLE sales ADD COLUMN fiscalStatus TEXT',
     'ALTER TABLE sales ADD COLUMN userId TEXT',
@@ -244,6 +260,8 @@ const initDB = () => {
     'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
     'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
     'ALTER TABLE payment_transactions ADD COLUMN payload TEXT',
+    "ALTER TABLE fiscal_settings ADD COLUMN providerMode TEXT DEFAULT 'simulated'",
+    'ALTER TABLE fiscal_documents ADD COLUMN validationMessages TEXT',
   ];
   for (const sql of migrations) {
     try { db.prepare(sql).run(); } catch (e) {}

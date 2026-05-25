@@ -10,6 +10,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./database');
 const { addOneMonth } = require('./database');
 const { PROVIDERS, getPixProvider, makeProviderReference } = require('./pixProviders');
+const { getFiscalProvider } = require('./fiscalProviders');
 
 const app = express();
 
@@ -206,6 +207,7 @@ const sanitizeFiscalSettings = (settings) => {
   return {
     establishmentId: settings.establishmentId,
     enabled: Number(settings.enabled || 0),
+    providerMode: settings.providerMode || 'simulated',
     environment: settings.environment,
     documentModel: settings.documentModel,
     serie: settings.serie,
@@ -233,9 +235,9 @@ const ensureFiscalSettings = (estId) => {
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO fiscal_settings (
-      establishmentId, enabled, environment, documentModel, serie, nextNumber,
+      establishmentId, enabled, providerMode, environment, documentModel, serie, nextNumber,
       taxRegime, autoIssueOnPayment, autoPrintOnAuthorization, createdAt, updatedAt
-    ) VALUES (?, 0, 'homologation', '65', '1', 1, 'simples', 0, 0, ?, ?)
+    ) VALUES (?, 0, 'simulated', 'homologation', '65', '1', 1, 'simples', 0, 0, ?, ?)
   `).run(estId, now, now);
   return db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
 };
@@ -302,6 +304,67 @@ const upsertFiscalDocumentForSale = (saleId, estId, options = {}) => {
   return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(id);
 };
 
+const issueFiscalDocument = (documentId, estId) => {
+  let document = db.prepare('SELECT * FROM fiscal_documents WHERE id = ? AND establishmentId = ?').get(documentId, estId);
+  if (!document) throw new Error('Documento fiscal nao encontrado.');
+  if (document.status === 'authorized') return document;
+
+  const settings = ensureFiscalSettings(estId);
+  if (!document.number) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE fiscal_documents
+      SET number = ?, serie = ?, environment = ?, updatedAt = ?
+      WHERE id = ? AND establishmentId = ?
+    `).run(settings.nextNumber || 1, settings.serie || '1', settings.environment || 'homologation', now, documentId, estId);
+    db.prepare('UPDATE fiscal_settings SET nextNumber = nextNumber + 1, updatedAt = ? WHERE establishmentId = ?')
+      .run(now, estId);
+    document = db.prepare('SELECT * FROM fiscal_documents WHERE id = ? AND establishmentId = ?').get(documentId, estId);
+  }
+  const provider = getFiscalProvider(settings.providerMode || 'simulated');
+  if (!provider) {
+    db.prepare(`
+      UPDATE fiscal_documents
+      SET status = 'pending_authorization', error = ?, updatedAt = ?
+      WHERE id = ? AND establishmentId = ?
+    `).run('Provider SEFAZ GO real ainda nao implementado. Use o modo simulado para testes internos.', new Date().toISOString(), documentId, estId);
+    return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(documentId);
+  }
+
+  const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(document.saleId, estId);
+  if (!sale) throw new Error('Venda do documento fiscal nao encontrada.');
+  const items = db.prepare(`
+    SELECT si.*, p.ncm, p.cfop, p.csosn, p.cst, p.fiscalUnit, p.origin, p.taxRate
+    FROM sale_items si
+    LEFT JOIN products p ON p.id = si.productId AND p.establishmentId = ?
+    WHERE si.saleId = ?
+  `).all(estId, sale.id);
+
+  const result = provider.authorize({ settings, document, sale, items });
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE fiscal_documents
+    SET status = ?, accessKey = ?, protocol = ?, qrCodeUrl = ?, xml = ?,
+        validationMessages = ?, error = ?, authorizedAt = ?, updatedAt = ?
+    WHERE id = ? AND establishmentId = ?
+  `).run(
+    result.status,
+    result.accessKey || null,
+    result.protocol || null,
+    result.qrCodeUrl || null,
+    result.xml || null,
+    JSON.stringify(result.validationMessages || []),
+    result.reason || null,
+    result.status === 'authorized' ? now : null,
+    now,
+    documentId,
+    estId
+  );
+  db.prepare('UPDATE sales SET fiscalStatus = ? WHERE id = ? AND establishmentId = ?')
+    .run(result.status, sale.id, estId);
+  return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(documentId);
+};
+
 const validateSaleItemsForTenant = (items, estId) => {
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error('Itens da venda sao obrigatorios.');
@@ -333,7 +396,10 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
   insertSale();
   const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
   if (settings?.enabled && settings?.autoIssueOnPayment) {
-    upsertFiscalDocumentForSale(saleId, estId);
+    const document = upsertFiscalDocumentForSale(saleId, estId);
+    if ((settings.providerMode || 'simulated') === 'simulated') {
+      issueFiscalDocument(document.id, estId);
+    }
   }
   return saleId;
 };
@@ -736,7 +802,7 @@ app.get('/api/products', authenticateToken, (req, res) => {
 });
 
 app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
-  const { barcode, name, costPrice, sellPrice, stock, category } = req.body;
+  const { barcode, name, costPrice, sellPrice, stock, category, ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate } = req.body;
   if (!name || costPrice == null || sellPrice == null) {
     return res.status(400).json({ error: 'Nome, preço de custo e preço de venda são obrigatórios.' });
   }
@@ -747,8 +813,17 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
     return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
   }
   try {
-    db.prepare(`INSERT INTO products (id, barcode, name, costPrice, sellPrice, stock, category, establishmentId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral', estId, now, now);
+    db.prepare(`
+      INSERT INTO products (
+        id, barcode, name, costPrice, sellPrice, stock, category,
+        ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate,
+        establishmentId, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral',
+      ncm || null, cfop || null, csosn || null, cst || null, fiscalUnit || 'UN', origin || '0', Number(taxRate || 0),
+      estId, now, now
+    );
     res.status(201).json({ id, message: 'Produto inserido com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -759,7 +834,7 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const now = new Date().toISOString();
-  const allowedProductFields = ['barcode', 'name', 'costPrice', 'sellPrice', 'stock', 'category'];
+  const allowedProductFields = ['barcode', 'name', 'costPrice', 'sellPrice', 'stock', 'category', 'ncm', 'cfop', 'csosn', 'cst', 'fiscalUnit', 'origin', 'taxRate'];
   try {
     const product = canAccessTenantRecord(req, 'products', id);
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
@@ -871,12 +946,13 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
     ensureFiscalSettings(estId);
 
     const {
-      enabled, environment, serie, nextNumber, cnpj, stateRegistration, legalName, tradeName,
+      enabled, providerMode, environment, serie, nextNumber, cnpj, stateRegistration, legalName, tradeName,
       taxRegime, cscId, csc, certificatePath, certificatePassword,
       autoIssueOnPayment, autoPrintOnAuthorization,
     } = req.body;
 
     const normalizedEnvironment = environment === 'production' ? 'production' : 'homologation';
+    const normalizedProviderMode = providerMode === 'sefaz_go' ? 'sefaz_go' : 'simulated';
     const normalizedTaxRegime = ['simples', 'normal'].includes(taxRegime) ? taxRegime : 'simples';
     const safeSerie = String(serie || '1').trim();
     const safeNextNumber = Math.max(1, Number.parseInt(nextNumber, 10) || 1);
@@ -885,13 +961,14 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
 
     db.prepare(`
       UPDATE fiscal_settings
-      SET enabled = ?, environment = ?, documentModel = '65', serie = ?, nextNumber = ?,
+      SET enabled = ?, providerMode = ?, environment = ?, documentModel = '65', serie = ?, nextNumber = ?,
           cnpj = ?, stateRegistration = ?, legalName = ?, tradeName = ?, taxRegime = ?,
           cscId = ?, csc = ?, certificatePath = ?, certificatePassword = ?,
           autoIssueOnPayment = ?, autoPrintOnAuthorization = ?, updatedAt = ?
       WHERE establishmentId = ?
     `).run(
       enabled ? 1 : 0,
+      normalizedProviderMode,
       normalizedEnvironment,
       safeSerie,
       safeNextNumber,
@@ -966,6 +1043,16 @@ app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove
     if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
     const document = upsertFiscalDocumentForSale(req.params.saleId, req.user.establishmentId, { force: true });
     res.status(201).json(document);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
+    const document = issueFiscalDocument(req.params.id, req.user.establishmentId);
+    res.json(document);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

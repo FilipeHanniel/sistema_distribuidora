@@ -6,6 +6,13 @@ export interface Product {
   sellPrice: number;
   stock: number;
   category: string;
+  ncm?: string;
+  cfop?: string;
+  csosn?: string;
+  cst?: string;
+  fiscalUnit?: string;
+  origin?: string;
+  taxRate?: number;
   establishmentId?: string;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +109,7 @@ export interface AppNotification {
 export interface FiscalSettings {
   establishmentId: string;
   enabled: number;
+  providerMode: 'simulated' | 'sefaz_go';
   environment: 'homologation' | 'production';
   documentModel: '65';
   serie: string;
@@ -133,6 +141,7 @@ export interface FiscalDocument {
   accessKey?: string;
   protocol?: string;
   qrCodeUrl?: string;
+  validationMessages?: string;
   error?: string;
   authorizedAt?: string;
   printedAt?: string;

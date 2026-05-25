@@ -13,6 +13,8 @@ Este projeto deve tratar a impressao fiscal automatica como emissao de NFC-e mod
 
 - O sistema guarda uma configuracao fiscal por estabelecimento.
 - O PDV pode preparar um documento fiscal para cada venda paga.
+- O modo fiscal inicial e um simulador interno da SEFAZ, sem comunicacao externa.
+- A arquitetura separa o app do provedor fiscal para permitir trocar o simulador por SEFAZ GO real.
 - A impressao automatica so deve acontecer depois da autorizacao da SEFAZ ou dentro de regra formal de contingencia.
 - O comprovante atual continua sendo recibo interno, sem valor fiscal.
 - Segredos fiscais, como CSC e senha do certificado, nao voltam para o frontend e sao armazenados cifrados no backend.
@@ -29,6 +31,21 @@ Este projeto deve tratar a impressao fiscal automatica como emissao de NFC-e mod
 - ID CSC e CSC.
 - Certificado digital A1 e senha no servidor.
 - Flags para emitir apos pagamento confirmado e imprimir apos autorizacao.
+
+## Campos fiscais minimos por produto
+
+- NCM.
+- CFOP.
+- CSOSN ou CST.
+- Unidade fiscal.
+- Origem da mercadoria.
+- Aliquota de ICMS quando aplicavel.
+
+## Simulador interno
+
+O `FakeSefazProvider` valida os cadastros e retorna autorizacao ou rejeicao simulada. Quando autorizado, gera chave de acesso fake no formato de 44 digitos, protocolo simulado, URL de QR Code simulada e XML simplificado para testes de fluxo.
+
+Ele nao substitui a homologacao oficial. Serve para deixar o produto pronto antes de termos CNPJ, IE, certificado digital e credenciamento real em Goias.
 
 ## Proximas etapas tecnicas
 

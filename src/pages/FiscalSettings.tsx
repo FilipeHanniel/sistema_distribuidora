@@ -12,6 +12,7 @@ type FiscalResponse = {
 const emptySettings: FiscalSettingsType = {
   establishmentId: '',
   enabled: 0,
+  providerMode: 'simulated',
   environment: 'homologation',
   documentModel: '65',
   serie: '1',
@@ -96,6 +97,15 @@ export default function FiscalSettings() {
     }
   };
 
+  const issueDocument = async (document: FiscalDocument) => {
+    try {
+      await apiRequest(`/fiscal/documents/${document.id}/issue`, { method: 'POST' });
+      await loadData();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao emitir documento fiscal simulado.'));
+    }
+  };
+
   const update = <K extends keyof FiscalSettingsType>(key: K, value: FiscalSettingsType[K]) => {
     setForm(prev => ({ ...prev, [key]: value }));
   };
@@ -139,6 +149,13 @@ export default function FiscalSettings() {
 
             <div className="form-row">
               <div className="form-group">
+                <label>Modo fiscal</label>
+                <select className="form-control" value={form.providerMode} onChange={e => update('providerMode', e.target.value as FiscalSettingsType['providerMode'])}>
+                  <option value="simulated">Simulado interno</option>
+                  <option value="sefaz_go">SEFAZ GO real</option>
+                </select>
+              </div>
+              <div className="form-group">
                 <label>Ambiente</label>
                 <select className="form-control" value={form.environment} onChange={e => update('environment', e.target.value as FiscalSettingsType['environment'])}>
                   <option value="homologation">Homologacao</option>
@@ -152,6 +169,10 @@ export default function FiscalSettings() {
                   <option value="normal">Regime normal</option>
                 </select>
               </div>
+            </div>
+
+            <div className="fiscal-note">
+              No modo simulado, o backend valida os cadastros e autoriza/rejeita localmente. No modo SEFAZ GO real, a estrutura fica pronta, mas o envio oficial ainda depende do motor de XML assinado e webservices.
             </div>
 
             <div className="form-row">
@@ -246,6 +267,11 @@ export default function FiscalSettings() {
                       <span>{new Date(doc.saleCreatedAt || doc.createdAt).toLocaleString('pt-BR')}</span>
                     </div>
                     {doc.error && <small>{doc.error}</small>}
+                    {doc.status !== 'authorized' && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => issueDocument(doc)}>
+                        Emitir simulado
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

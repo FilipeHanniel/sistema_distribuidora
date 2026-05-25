@@ -1,0 +1,100 @@
+const crypto = require('crypto');
+
+const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
+
+const makeAccessKey = (settings, document, sale) => {
+  const cnpj = onlyDigits(settings.cnpj).padStart(14, '0').slice(0, 14);
+  const model = String(document.model || '65').padStart(2, '0');
+  const serie = String(document.serie || '1').padStart(3, '0').slice(-3);
+  const number = String(document.number || 1).padStart(9, '0').slice(-9);
+  const date = new Date(sale.createdAt || Date.now());
+  const aamm = `${String(date.getFullYear()).slice(-2)}${String(date.getMonth() + 1).padStart(2, '0')}`;
+  const code = crypto.createHash('sha1').update(`${sale.id}:${document.id}`).digest('hex').replace(/\D/g, '').padEnd(8, '0').slice(0, 8);
+  const base = `52${aamm}${cnpj}${model}${serie}${number}1${code}`;
+  return `${base}${calculateCheckDigit(base)}`;
+};
+
+const calculateCheckDigit = (base) => {
+  let weight = 2;
+  let sum = 0;
+  for (let i = base.length - 1; i >= 0; i--) {
+    sum += Number(base[i]) * weight;
+    weight = weight === 9 ? 2 : weight + 1;
+  }
+  const mod = sum % 11;
+  const digit = 11 - mod;
+  return digit >= 10 ? 0 : digit;
+};
+
+const validateSettings = (settings) => {
+  const errors = [];
+  if (!settings?.enabled) errors.push({ code: 'F001', message: 'Modulo fiscal desativado.' });
+  if (onlyDigits(settings?.cnpj).length !== 14) errors.push({ code: 'F002', message: 'CNPJ do emitente invalido ou ausente.' });
+  if (!settings?.stateRegistration) errors.push({ code: 'F003', message: 'Inscricao estadual ausente.' });
+  if (!settings?.legalName) errors.push({ code: 'F004', message: 'Razao social ausente.' });
+  if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F005', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
+  if (!settings?.certificatePath || !settings?.certificatePassword) errors.push({ code: 'F006', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
+  return errors;
+};
+
+const validateProducts = (items) => {
+  const errors = [];
+  for (const item of items) {
+    const name = item.name || item.productName || item.productId;
+    if (!onlyDigits(item.ncm).match(/^\d{8}$/)) errors.push({ code: 'P001', message: `Produto "${name}" sem NCM valido de 8 digitos.` });
+    if (!onlyDigits(item.cfop).match(/^\d{4}$/)) errors.push({ code: 'P002', message: `Produto "${name}" sem CFOP valido de 4 digitos.` });
+    if (!item.fiscalUnit) errors.push({ code: 'P003', message: `Produto "${name}" sem unidade fiscal.` });
+    if (!item.origin) errors.push({ code: 'P004', message: `Produto "${name}" sem origem fiscal.` });
+    if (!item.csosn && !item.cst) errors.push({ code: 'P005', message: `Produto "${name}" sem CSOSN/CST.` });
+  }
+  return errors;
+};
+
+class FakeSefazProvider {
+  authorize({ settings, document, sale, items }) {
+    const errors = [...validateSettings(settings), ...validateProducts(items)];
+    if (errors.length) {
+      return {
+        status: 'rejected',
+        cStat: '999',
+        reason: 'Rejeicao simulada por inconsistencias fiscais.',
+        validationMessages: errors,
+      };
+    }
+
+    const accessKey = makeAccessKey(settings, document, sale);
+    const protocol = `SIM${Date.now()}`;
+    const qrCodeUrl = `https://homolog.sefaz.go.gov.br/nfce/qrcode?p=${accessKey}|2|${settings.environment}|${settings.cscId}`;
+
+    return {
+      status: 'authorized',
+      cStat: '100',
+      reason: 'Autorizado o uso da NFC-e (simulado).',
+      accessKey,
+      protocol,
+      qrCodeUrl,
+      xml: [
+        '<NFe xmlns="http://www.portalfiscal.inf.br/nfe">',
+        `  <infNFe Id="NFe${accessKey}" versao="4.00">`,
+        `    <ide><mod>65</mod><serie>${document.serie || '1'}</serie><nNF>${document.number || 1}</nNF></ide>`,
+        `    <emit><CNPJ>${onlyDigits(settings.cnpj)}</CNPJ><xNome>${settings.legalName}</xNome></emit>`,
+        `    <total><ICMSTot><vNF>${Number(sale.totalAmount || 0).toFixed(2)}</vNF></ICMSTot></total>`,
+        '  </infNFe>',
+        `  <protNFe><infProt><chNFe>${accessKey}</chNFe><nProt>${protocol}</nProt><cStat>100</cStat></infProt></protNFe>`,
+        '</NFe>',
+      ].join('\n'),
+      validationMessages: [],
+    };
+  }
+}
+
+const getFiscalProvider = (mode) => {
+  if (mode === 'simulated') return new FakeSefazProvider();
+  return null;
+};
+
+module.exports = {
+  getFiscalProvider,
+  validateSettings,
+  validateProducts,
+};

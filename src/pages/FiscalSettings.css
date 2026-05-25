@@ -99,6 +99,17 @@
   margin: 0.85rem 0;
 }
 
+.fiscal-note {
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 0.4rem 0 1rem;
+}
+
 .fiscal-doc-list {
   display: flex;
   flex-direction: column;
@@ -136,6 +147,11 @@
   grid-column: 1 / -1;
   padding-top: 0.35rem;
   border-top: 1px solid var(--border-color);
+}
+
+.fiscal-doc-item button {
+  grid-column: 1 / -1;
+  justify-self: flex-start;
 }
 
 .fiscal-empty {
