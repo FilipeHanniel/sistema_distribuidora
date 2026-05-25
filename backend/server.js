@@ -450,13 +450,21 @@ const collectAiReportMetrics = (estId, startIso, endIso) => {
     LIMIT 8
   `).all(estId, startIso, endIso);
 
+  const lowStockStart = new Date(new Date(endIso).getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
   const lowStock = db.prepare(`
-    SELECT name, stock, category
-    FROM products
-    WHERE establishmentId = ? AND stock <= 5
-    ORDER BY stock ASC, name ASC
+    SELECT p.name, p.stock, p.category, COALESCE(SUM(si.quantity), 0) as soldLast90d
+    FROM products p
+    INNER JOIN sale_items si ON si.productId = p.id
+    INNER JOIN sales s ON s.id = si.saleId AND s.establishmentId = p.establishmentId
+    WHERE p.establishmentId = ?
+      AND p.stock <= 5
+      AND s.createdAt >= ?
+      AND s.createdAt < ?
+    GROUP BY p.id, p.name, p.stock, p.category
+    HAVING soldLast90d > 0
+    ORDER BY p.stock ASC, soldLast90d DESC, p.name ASC
     LIMIT 10
-  `).all(estId);
+  `).all(estId, lowStockStart, endIso);
 
   const paymentMethods = db.prepare(`
     SELECT paymentMethod, COUNT(*) as count, COALESCE(SUM(totalAmount), 0) as revenue
@@ -502,12 +510,32 @@ Meios de pagamento: ${metrics.paymentMethods.map(p => `${p.paymentMethod}: ${p.c
 Produtos mais vendidos: ${metrics.topProducts.map(p => `${p.name}: ${p.quantity} un/R$${Number(p.revenue).toFixed(2)}`).join('; ') || 'sem vendas'}
 Estoque baixo: ${metrics.lowStock.map(p => `${p.name}: ${p.stock} un`).join('; ') || 'nenhum'}
 
-Formato obrigatorio:
-1. Resumo executivo em 3 linhas.
-2. O que melhorou ou piorou.
-3. Produtos que merecem atencao.
-4. Acoes recomendadas para o proximo periodo.
-5. Alertas de estoque e caixa.
+Perguntas que voce deve responder:
+1. Como foi o desempenho do periodo?
+2. O negocio cresceu, caiu ou ficou estavel em relacao ao periodo anterior?
+3. Quais produtos, categorias ou comportamentos merecem atencao?
+4. O que o gestor deve fazer primeiro no proximo periodo?
+5. Existem alertas de estoque, caixa ou operacao?
+
+Formato obrigatorio de saida:
+Use exatamente os titulos abaixo, nesta ordem, em Markdown.
+Nao use introducao antes do primeiro titulo.
+Nao escreva linhas como "Relatorio diario", "Estabelecimento", "Periodo" ou "Resumo executivo em 3 linhas".
+No resumo executivo, escreva 1 paragrafo curto, sem bullets.
+Nas demais secoes, use bullets apenas quando ajudar.
+Comece bullets importantes com uma expressao em negrito seguida de dois-pontos.
+Se nao houver pontos positivos reais, omita a secao "Pontos positivos".
+Inclua "Produtos e estoque" somente em relatorio semanal.
+Inclua "Observacoes" para observacoes gerais da IA.
+Em "Acoes recomendadas", use bullets objetivos, um por acao.
+
+## Resumo executivo
+## Pontos positivos
+## Pontos de atencao
+${periodType === 'weekly' ? '## Produtos e estoque' : ''}
+## Observacoes
+## Alertas
+## Acoes recomendadas
 
 Nao invente dados. Se nao houver vendas, recomende acoes simples para gerar movimento.
 `;

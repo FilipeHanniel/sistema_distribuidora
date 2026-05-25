@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, FileText, CalendarDays } from 'lucide-react';
+import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, FileText, CalendarDays, Lightbulb, ListChecks, Target, CircleDot, BarChart3, CreditCard, Boxes } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
 import './Dashboard.css';
@@ -29,7 +29,194 @@ interface AiReport {
     averageTicket: number;
     previousRevenue: number;
     previousSalesCount: number;
+    paymentMethods?: { paymentMethod: string; count: number; revenue: number }[];
+    topProducts?: { name: string; quantity: number; revenue: number }[];
+    lowStock?: { name: string; stock: number; category: string; soldLast90d?: number }[];
   };
+}
+
+type ReportBlock = {
+  title: string;
+  items: string[];
+};
+
+const REPORT_SECTION_TITLES = [
+  'Resumo executivo',
+  'Pontos positivos',
+  'Pontos de atencao',
+  'Produtos e estoque',
+  'Observacoes',
+  'Alertas',
+  'Acoes recomendadas',
+];
+
+function parseReportContent(content: string): ReportBlock[] {
+  const lines = content
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => line !== '---')
+    .filter(line => {
+      const normalized = line.replace(/\*\*/g, '').replace(/^#+\s*/, '').trim().toLowerCase();
+      return !normalized.startsWith('relatorio diario')
+        && !normalized.startsWith('relatório diário')
+        && !normalized.startsWith('relatorio semanal')
+        && !normalized.startsWith('relatório semanal')
+        && !normalized.startsWith('periodo ')
+        && !normalized.startsWith('período ')
+        && normalized !== 'resumo executivo'
+        && !normalized.includes('resumo executivo (3');
+    });
+
+  const blocks: ReportBlock[] = [];
+  let current: ReportBlock = { title: REPORT_SECTION_TITLES[0], items: [] };
+
+  const flush = () => {
+    if (current.items.length > 0 || current.title !== REPORT_SECTION_TITLES[0]) {
+      blocks.push(current);
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\*\*/g, '').trim();
+    const heading = line.match(/^#{1,4}\s+(.+)$/) || line.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ][^:]{2,60}):$/);
+    if (heading) {
+      flush();
+      current = { title: heading[1].trim(), items: [] };
+      continue;
+    }
+
+    const listItem = line.replace(/^[-*•]\s+/, '').replace(/^\d+[.)]\s+/, '').trim();
+    current.items.push(listItem);
+  }
+
+  flush();
+  return blocks.length > 0 ? blocks : [{ title: REPORT_SECTION_TITLES[0], items: [content] }];
+}
+
+function reportIcon(title: string, index: number) {
+  const normalized = title.toLowerCase();
+  if (normalized.includes('indicador')) return <BarChart3 size={17} />;
+  if (normalized.includes('comparativo')) return <TrendingDown size={17} />;
+  if (normalized.includes('produto') || normalized.includes('estoque')) return <Boxes size={17} />;
+  if (normalized.includes('acao') || normalized.includes('recomend')) return <ListChecks size={17} />;
+  if (normalized.includes('alerta')) return <AlertTriangle size={17} />;
+  if (normalized.includes('oportun')) return <Target size={17} />;
+  return index === 0 ? <Lightbulb size={17} /> : <CircleDot size={17} />;
+}
+
+function renderInlineStrong(text: string) {
+  const cleaned = text.replace(/^[-*â€¢]\s+/, '').trim();
+  const match = cleaned.match(/^\*\*(.+?)\*\*:\s*(.+)$/) || cleaned.match(/^([^:]{2,42}):\s*(.+)$/);
+  if (!match) return cleaned;
+  return (
+    <>
+      <strong>{match[1]}</strong>
+      <span>{match[2]}</span>
+    </>
+  );
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0));
+}
+
+function growthLabel(current: number, previous: number) {
+  if (!previous && !current) return 'Sem movimento';
+  if (!previous) return 'Novo movimento';
+  const pct = ((current - previous) / previous) * 100;
+  const direction = pct >= 0 ? 'Alta' : 'Queda';
+  return `${direction} de ${Math.abs(pct).toFixed(1)}%`;
+}
+
+function AiReportMetricStrip({ report }: { report: AiReport }) {
+  const topPayment = report.metrics.paymentMethods?.[0];
+  const topProduct = report.metrics.topProducts?.[0];
+  const lowStockCount = report.metrics.lowStock?.length || 0;
+
+  return (
+    <div className="ai-report-metrics-strip">
+      <div className="ai-report-metric">
+        <BarChart3 size={16} />
+        <span>Vendas</span>
+        <strong>{report.metrics.salesCount}</strong>
+      </div>
+      <div className="ai-report-metric">
+        <CreditCard size={16} />
+        <span>Faturamento</span>
+        <strong>{formatCurrency(report.metrics.totalRevenue)}</strong>
+      </div>
+      <div className="ai-report-metric">
+        <Target size={16} />
+        <span>Ticket medio</span>
+        <strong>{formatCurrency(report.metrics.averageTicket)}</strong>
+      </div>
+      <div className="ai-report-metric">
+        <TrendingDown size={16} />
+        <span>Comparativo</span>
+        <strong>{growthLabel(report.metrics.totalRevenue, report.metrics.previousRevenue)}</strong>
+      </div>
+      <div className="ai-report-metric">
+        <Boxes size={16} />
+        <span>Destaque</span>
+        <strong>{topProduct ? topProduct.name : topPayment ? topPayment.paymentMethod : 'Sem destaque'}</strong>
+      </div>
+      <div className="ai-report-metric">
+        <AlertTriangle size={16} />
+        <span>Estoque baixo</span>
+        <strong>{lowStockCount}</strong>
+      </div>
+    </div>
+  );
+}
+
+function reportTitle(report: AiReport) {
+  const end = new Date(report.periodEnd);
+  const referenceDate = new Date(end.getTime() - 1);
+  const date = referenceDate.toLocaleDateString('pt-BR');
+  return `Resumo executivo ${report.periodType === 'weekly' ? 'semanal' : 'diario'} ${date}`;
+}
+
+function AiReportContent({ content }: { content: string }) {
+  const blocks = parseReportContent(content)
+    .filter(block => !['relatorio diario de gestao', 'relatorio semanal de gestao'].includes(block.title.toLowerCase()))
+    .map(block => ({
+      ...block,
+      items: block.items.filter(item => {
+        const normalized = item.replace(/\*\*/g, '').trim().toLowerCase();
+        return !normalized.startsWith('estabelecimento:')
+          && !normalized.startsWith('periodo:')
+          && !normalized.startsWith('período:')
+          && normalized !== '---'
+          && normalized !== 'resumo executivo'
+          && !normalized.includes('resumo executivo (3');
+      }),
+    }))
+    .filter(block => block.items.length > 0);
+
+  return (
+    <div className="ai-report-structured">
+      {blocks.map((block, index) => (
+        <section className={`ai-report-block ${index === 0 ? 'executive' : ''}`} key={`${block.title}-${index}`}>
+          <div className="ai-report-block-title">
+            {reportIcon(block.title, index)}
+            <h3>{block.title}</h3>
+          </div>
+          <div className="ai-report-block-items">
+            {block.items.map((item, itemIndex) => {
+              const compact = index === 0 || !item.match(/^(\*\*)?[^:]{2,42}(\*\*)?:/);
+              return (
+                <div className={`ai-report-item ${compact ? 'plain' : ''}`} key={`${item}-${itemIndex}`}>
+                  {!compact && <CircleDot size={10} />}
+                  <span>{renderInlineStrong(item)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -210,20 +397,22 @@ export default function Dashboard() {
             {dailyReport && (
               <div className="ai-report-card">
                 <div className="ai-report-meta">
-                  <span>{new Date(dailyReport.periodStart).toLocaleDateString('pt-BR')}</span>
-                  <strong>{dailyReport.metrics.salesCount} vendas - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(dailyReport.metrics.totalRevenue)}</strong>
+                  <span>{reportTitle(dailyReport)}</span>
+                  <strong>{dailyReport.metrics.salesCount} vendas - {formatCurrency(dailyReport.metrics.totalRevenue)}</strong>
                 </div>
-                <div className="ai-report-content">{dailyReport.content}</div>
+                <AiReportMetricStrip report={dailyReport} />
+                <AiReportContent content={dailyReport.content} />
               </div>
             )}
 
             {isMonday && weeklyReport && (
               <div className="ai-report-card weekly">
                 <div className="ai-report-meta">
-                  <span><CalendarDays size={15} /> Relatorio semanal</span>
-                  <strong>{weeklyReport.metrics.salesCount} vendas - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(weeklyReport.metrics.totalRevenue)}</strong>
+                  <span><CalendarDays size={15} /> {reportTitle(weeklyReport)}</span>
+                  <strong>{weeklyReport.metrics.salesCount} vendas - {formatCurrency(weeklyReport.metrics.totalRevenue)}</strong>
                 </div>
-                <div className="ai-report-content">{weeklyReport.content}</div>
+                <AiReportMetricStrip report={weeklyReport} />
+                <AiReportContent content={weeklyReport.content} />
               </div>
             )}
           </section>
