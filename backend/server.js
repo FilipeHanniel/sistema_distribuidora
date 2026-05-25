@@ -188,6 +188,11 @@ const decodeCredentials = (encoded) => {
   }
 };
 
+const decodeSecretValue = (encoded) => {
+  const decoded = decodeCredentials(encoded);
+  return decoded?.value || '';
+};
+
 const sanitizePixAccount = (account) => {
   if (!account) return account;
   return {
@@ -341,7 +346,16 @@ const issueFiscalDocument = async (documentId, estId) => {
     WHERE si.saleId = ?
   `).all(estId, sale.id);
 
-  const result = await provider.authorize({ settings, document, sale, items });
+  const result = await provider.authorize({
+    settings: {
+      ...settings,
+      csc: decodeSecretValue(settings.csc),
+      certificatePassword: decodeSecretValue(settings.certificatePassword),
+    },
+    document,
+    sale,
+    items,
+  });
   const now = new Date().toISOString();
   db.prepare(`
     UPDATE fiscal_documents
