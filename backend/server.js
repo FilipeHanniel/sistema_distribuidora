@@ -305,7 +305,7 @@ const upsertFiscalDocumentForSale = (saleId, estId, options = {}) => {
   return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(id);
 };
 
-const issueFiscalDocument = (documentId, estId) => {
+const issueFiscalDocument = async (documentId, estId) => {
   let document = db.prepare('SELECT * FROM fiscal_documents WHERE id = ? AND establishmentId = ?').get(documentId, estId);
   if (!document) throw new Error('Documento fiscal nao encontrado.');
   if (document.status === 'authorized') return document;
@@ -341,7 +341,7 @@ const issueFiscalDocument = (documentId, estId) => {
     WHERE si.saleId = ?
   `).all(estId, sale.id);
 
-  const result = provider.authorize({ settings, document, sale, items });
+  const result = await provider.authorize({ settings, document, sale, items });
   const now = new Date().toISOString();
   db.prepare(`
     UPDATE fiscal_documents
@@ -383,7 +383,7 @@ const validateSaleItemsForTenant = (items, estId) => {
   }
 };
 
-const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId = uuidv4()) => {
+const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, saleId = uuidv4()) => {
   const now = new Date().toISOString();
   const insertSale = db.transaction(() => {
     db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -401,7 +401,7 @@ const createPaidSale = (items, totalAmount, paymentMethod, userId, estId, saleId
   if (settings?.enabled && settings?.autoIssueOnPayment) {
     const document = upsertFiscalDocumentForSale(saleId, estId);
     if (['simulated', 'sefaz_go'].includes(settings.providerMode || 'simulated')) {
-      fiscalDocument = issueFiscalDocument(document.id, estId);
+      fiscalDocument = await issueFiscalDocument(document.id, estId);
     } else {
       fiscalDocument = document;
     }
@@ -1080,10 +1080,10 @@ app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove
   }
 });
 
-app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, (req, res) => {
+app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, async (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
-    const document = issueFiscalDocument(req.params.id, req.user.establishmentId);
+    const document = await issueFiscalDocument(req.params.id, req.user.establishmentId);
     res.json(document);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1244,7 +1244,7 @@ app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, re
   }
 });
 
-app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
+app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
   const { items, totalAmount, paymentMethod } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Itens da venda são obrigatórios.' });
@@ -1255,7 +1255,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, (req, res) => {
 
   try {
     validateSaleItemsForTenant(items, estId);
-    const saleResult = createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
+    const saleResult = await createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
     res.status(201).json({
       id: saleResult.saleId,
       fiscalDocument: saleResult.fiscalDocument,
@@ -1362,7 +1362,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       const stored = JSON.parse(fresh.payload || '{}');
       const storedItems = stored.items || [];
       validateSaleItemsForTenant(storedItems, estId);
-      const saleResult = createPaidSale(storedItems, fresh.amount, 'pix', req.user.id, estId);
+      const saleResult = await createPaidSale(storedItems, fresh.amount, 'pix', req.user.id, estId);
       saleId = saleResult.saleId;
       db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
         .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
