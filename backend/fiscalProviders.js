@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { buildNfceXml, onlyDigits } = require('./fiscalXmlBuilder');
+const { SefazGoProvider } = require('./sefazGoProvider');
 
 const makeAccessKey = (settings, document, sale) => {
   const cnpj = onlyDigits(settings.cnpj).padStart(14, '0').slice(0, 14);
@@ -95,6 +96,7 @@ class FakeSefazProvider {
 
 const getFiscalProvider = (mode) => {
   if (mode === 'simulated') return new FakeSefazProvider();
+  if (mode === 'sefaz_go') return new SefazGoProvider();
   return null;
 };
 
