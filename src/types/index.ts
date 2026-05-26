@@ -64,7 +64,7 @@ export interface Establishment {
   createdAt: string;
 }
 
-export type PixProvider = 'fake' | 'mercado_pago' | 'asaas' | 'sicoob' | 'itau' | 'santander' | 'bradesco';
+export type PixProvider = 'fake' | 'mercado_pago_fake' | 'mercado_pago' | 'asaas' | 'sicoob' | 'itau' | 'santander' | 'bradesco';
 
 export interface PixAccount {
   id: string;
@@ -72,6 +72,11 @@ export interface PixAccount {
   name: string;
   provider: PixProvider;
   pixKey?: string;
+  supportsPix?: boolean;
+  supportsPoint?: boolean;
+  terminalId?: string;
+  storeId?: string;
+  posId?: string;
   active: number;
   isDefault: number;
   createdAt: string;
@@ -90,6 +95,19 @@ export interface PixTransaction {
   ticketUrl?: string;
   expiresAt?: string;
   pixAccount?: PixAccount;
+}
+
+export interface CardTransaction {
+  id: string;
+  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  saleId?: string;
+  fiscalDocument?: FiscalDocument | null;
+  paidAt?: string;
+  amount: number;
+  provider?: string;
+  providerTransactionId?: string;
+  terminalId?: string;
+  expiresAt?: string;
 }
 
 export interface AppNotification {

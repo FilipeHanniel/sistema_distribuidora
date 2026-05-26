@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./database');
 const { addOneMonth } = require('./database');
-const { PROVIDERS, getPixProvider, makeProviderReference } = require('./pixProviders');
+const { PROVIDERS, getPixProvider, getPointProvider, makeProviderReference } = require('./pixProviders');
 const { getFiscalProvider } = require('./fiscalProviders');
 
 const app = express();
@@ -195,12 +195,18 @@ const decodeSecretValue = (encoded) => {
 
 const sanitizePixAccount = (account) => {
   if (!account) return account;
+  const credentials = decodeCredentials(account.credentials);
   return {
     id: account.id,
     establishmentId: account.establishmentId,
     name: account.name,
     provider: account.provider,
     pixKey: account.pixKey,
+    supportsPix: credentials.supportsPix !== false,
+    supportsPoint: Boolean(credentials.supportsPoint),
+    terminalId: credentials.terminalId || '',
+    storeId: credentials.storeId || '',
+    posId: credentials.posId || '',
     active: account.active,
     isDefault: account.isDefault,
     createdAt: account.createdAt,
@@ -1197,6 +1203,12 @@ app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => 
     const { name, provider, pixKey, credentials, isDefault } = req.body;
     if (!name || !provider) return res.status(400).json({ error: 'Nome e provider sao obrigatorios.' });
     if (!PROVIDERS[provider]) return res.status(400).json({ error: 'Provider Pix invalido.' });
+    if (provider === 'mercado_pago' && !String(credentials?.accessToken || '').trim()) {
+      return res.status(400).json({ error: 'Access Token do Mercado Pago e obrigatorio.' });
+    }
+    if (provider === 'mercado_pago' && credentials?.supportsPoint && !String(credentials?.terminalId || '').trim()) {
+      return res.status(400).json({ error: 'Terminal ID do Mercado Pago Point e obrigatorio.' });
+    }
 
     const existingCount = db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ?').get(estId).c;
     if (existingCount >= 3) return res.status(400).json({ error: 'Limite inicial de 3 contas Pix atingido.' });
@@ -1228,6 +1240,17 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) 
 
     const { name, provider, pixKey, credentials, active, isDefault } = req.body;
     if (!name || !provider || !PROVIDERS[provider]) return res.status(400).json({ error: 'Dados da conta Pix invalidos.' });
+    const currentCredentials = decodeCredentials(account.credentials);
+    const mergedCredentials = {
+      ...currentCredentials,
+      ...(credentials || {}),
+    };
+    if (provider === 'mercado_pago' && !String(mergedCredentials.accessToken || '').trim()) {
+      return res.status(400).json({ error: 'Access Token do Mercado Pago e obrigatorio.' });
+    }
+    if (provider === 'mercado_pago' && mergedCredentials.supportsPoint && !String(mergedCredentials.terminalId || '').trim()) {
+      return res.status(400).json({ error: 'Terminal ID do Mercado Pago Point e obrigatorio.' });
+    }
     const now = new Date().toISOString();
 
     const updateAccount = db.transaction(() => {
@@ -1236,7 +1259,7 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) 
         UPDATE pix_accounts
         SET name = ?, provider = ?, pixKey = ?, credentials = ?, active = ?, isDefault = ?, updatedAt = ?
         WHERE id = ? AND establishmentId = ?
-      `).run(name, provider, pixKey || null, encodeCredentials(credentials || {}), active ? 1 : 0, isDefault ? 1 : 0, now, req.params.id, estId);
+      `).run(name, provider, pixKey || null, encodeCredentials(mergedCredentials), active ? 1 : 0, isDefault ? 1 : 0, now, req.params.id, estId);
     });
     updateAccount();
 
@@ -1251,6 +1274,14 @@ app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, re
     const estId = req.user.role === 'superadmin' ? req.query.establishmentId : req.user.establishmentId;
     const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
     if (!account) return res.status(404).json({ error: 'Conta Pix nao encontrada.' });
+    const linkedTransactions = db.prepare('SELECT COUNT(*) as c FROM payment_transactions WHERE pixAccountId = ? AND establishmentId = ?')
+      .get(req.params.id, estId).c;
+    if (linkedTransactions > 0) {
+      const now = new Date().toISOString();
+      db.prepare('UPDATE pix_accounts SET active = 0, isDefault = 0, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+        .run(now, req.params.id, estId);
+      return res.json({ message: 'Conta possui historico de transacoes e foi desativada.' });
+    }
     db.prepare('DELETE FROM pix_accounts WHERE id = ? AND establishmentId = ?').run(req.params.id, estId);
     res.json({ message: 'Conta Pix removida.' });
   } catch (err) {
@@ -1291,6 +1322,10 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       ? db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ? AND active = 1').get(pixAccountId, estId)
       : db.prepare('SELECT * FROM pix_accounts WHERE establishmentId = ? AND active = 1 ORDER BY isDefault DESC, createdAt DESC LIMIT 1').get(estId);
     if (!account) return res.status(400).json({ error: 'Nenhuma conta Pix ativa configurada.' });
+    const accountCredentials = decodeCredentials(account.credentials);
+    if (accountCredentials.supportsPix === false) {
+      return res.status(400).json({ error: 'Esta conta nao esta habilitada para Pix.' });
+    }
     if (!PROVIDERS[account.provider]?.implemented) {
       return res.status(400).json({ error: 'Provider Pix ainda nao implementado para cobranca real.' });
     }
@@ -1301,7 +1336,7 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
     const charge = await provider.createCharge({
       amount: totalAmount,
       referenceId,
-      credentials: decodeCredentials(account.credentials),
+      credentials: accountCredentials,
       description: `Venda PDV ${transactionId}`,
     });
     const createdAt = new Date().toISOString();
@@ -1339,7 +1374,128 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       pixAccount: sanitizePixAccount(account),
     });
   } catch (err) {
-    console.error('[Pix Create Error]', err.message);
+    console.error('[Pix Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const { items, totalAmount, accountId } = req.body;
+    const estId = req.user.establishmentId;
+    validateSaleItemsForTenant(items, estId);
+
+    const account = accountId
+      ? db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ? AND active = 1').get(accountId, estId)
+      : db.prepare('SELECT * FROM pix_accounts WHERE establishmentId = ? AND active = 1 ORDER BY isDefault DESC, createdAt DESC LIMIT 1').get(estId);
+    if (!account) return res.status(400).json({ error: 'Nenhuma conta de recebimento ativa configurada para cartao.' });
+
+    const credentials = decodeCredentials(account.credentials);
+    if (!credentials.supportsPoint) {
+      return res.status(400).json({ error: 'Esta conta nao esta habilitada para pagamento em terminal.' });
+    }
+    if (!PROVIDERS[account.provider]?.supportsPoint) {
+      return res.status(400).json({ error: 'Provider sem suporte a terminal/Point.' });
+    }
+
+    const transactionId = uuidv4();
+    const referenceId = makeProviderReference();
+    const provider = getPointProvider(account.provider);
+    const order = await provider.createOrder({
+      amount: totalAmount,
+      referenceId,
+      credentials,
+      description: `Venda PDV ${transactionId}`,
+    });
+    const createdAt = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO payment_transactions (
+        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
+        payload, expiresAt, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'card', ?, ?, ?, ?)
+    `).run(
+      transactionId,
+      estId,
+      account.id,
+      account.provider,
+      order.providerTransactionId,
+      order.status,
+      totalAmount,
+      JSON.stringify({ items, providerPaymentId: order.providerPaymentId || null, providerPayload: order.payload || null }),
+      order.expiresAt || null,
+      createdAt,
+      createdAt
+    );
+
+    res.status(201).json({
+      id: transactionId,
+      status: order.status,
+      amount: totalAmount,
+      provider: account.provider,
+      providerTransactionId: order.providerTransactionId,
+      terminalId: credentials.terminalId || '',
+      expiresAt: order.expiresAt || null,
+    });
+  } catch (err) {
+    console.error('[Card Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
+      .get(req.params.id, estId, 'card');
+    if (!transaction) return res.status(404).json({ error: 'Transacao de cartao nao encontrada.' });
+
+    let status = transaction.status;
+    let paidAt = transaction.paidAt;
+    let saleId = transaction.saleId;
+
+    if (status === 'pending') {
+      const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
+      if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
+      const statusResult = await getPointProvider(account.provider).getStatus({
+        transaction,
+        credentials: decodeCredentials(account.credentials),
+      });
+      status = statusResult.status;
+      paidAt = statusResult.paidAt || paidAt;
+      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
+        .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
+          ...JSON.parse(transaction.payload || '{}'),
+          latestProviderPayload: statusResult.payload || null,
+        }), transaction.id);
+    }
+
+    if (status === 'paid' && !saleId) {
+      const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+      const stored = JSON.parse(fresh.payload || '{}');
+      const storedItems = stored.items || [];
+      validateSaleItemsForTenant(storedItems, estId);
+      const saleResult = await createPaidSale(storedItems, fresh.amount, 'card', req.user.id, estId);
+      saleId = saleResult.saleId;
+      db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
+        .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+    }
+
+    const fiscalDocument = saleId
+      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(saleId, estId) || null
+      : null;
+
+    res.json({
+      id: transaction.id,
+      status,
+      saleId,
+      fiscalDocument,
+      paidAt,
+      amount: transaction.amount,
+      expiresAt: transaction.expiresAt,
+    });
+  } catch (err) {
+    console.error('[Card Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
   }
 });
@@ -1399,7 +1555,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       expiresAt: transaction.expiresAt,
     });
   } catch (err) {
-    console.error('[Pix Status Error]', err.message);
+    console.error('[Pix Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { FiscalDocument, PixTransaction, Sale, SaleItem } from '../types';
+import type { CardTransaction, FiscalDocument, PixTransaction, Sale, SaleItem } from '../types';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useInventoryStore } from './useInventoryStore';
 
@@ -23,6 +23,8 @@ interface SalesState {
   addSale: (items: SaleItem[], totalAmount: number, paymentMethod: string) => Promise<string | undefined>;
   createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string) => Promise<PixTransaction | undefined>;
   checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
+  createCardPayment: (items: SaleItem[], totalAmount: number, accountId?: string) => Promise<CardTransaction | undefined>;
+  checkCardPayment: (transactionId: string) => Promise<CardTransaction | undefined>;
   getSalesByDateRange: (startDate: Date, endDate: Date) => Sale[];
   triggerSuccessPopup: (id: string, amount: number, method: PaymentMethod, items: SaleItem[], fiscalDocument?: FiscalDocument | null) => void;
   closeSuccessPopup: () => void;
@@ -100,6 +102,42 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       return transaction;
     } catch (err) {
       console.error('Falha ao consultar Pix:', err);
+      return undefined;
+    }
+  },
+
+  createCardPayment: async (items, totalAmount, accountId) => {
+    try {
+      const transaction = await apiRequest<CardTransaction>('/payments/card', {
+        method: 'POST',
+        body: { items, totalAmount, accountId },
+      });
+      set(state => ({ pendingPixItems: { ...state.pendingPixItems, [transaction.id]: items } }));
+      return transaction;
+    } catch (err) {
+      console.error('Falha ao criar pagamento no terminal:', err);
+      alert(getApiErrorMessage(err, 'Erro ao enviar venda para o terminal'));
+      return undefined;
+    }
+  },
+
+  checkCardPayment: async (transactionId) => {
+    try {
+      const transaction = await apiRequest<CardTransaction>(`/payments/card/${transactionId}/status`);
+      if (transaction.status === 'paid' && transaction.saleId) {
+        get().fetchSales();
+        useInventoryStore.getState().fetchProducts();
+        const items = get().pendingPixItems[transactionId] || [];
+        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'card', items, transaction.fiscalDocument || null);
+        set(state => {
+          const next = { ...state.pendingPixItems };
+          delete next[transactionId];
+          return { pendingPixItems: next };
+        });
+      }
+      return transaction;
+    } catch (err) {
+      console.error('Falha ao consultar terminal:', err);
       return undefined;
     }
   },

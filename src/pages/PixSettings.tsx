@@ -1,14 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { CreditCard, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { CreditCard, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle, Pencil } from 'lucide-react';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import Modal from '../components/Modal';
 import type { PixAccount, PixProvider } from '../types';
 import './PixSettings.css';
 
-type ProviderInfo = Record<string, { label: string; implemented: boolean; requires: string[] }>;
+type ProviderInfo = Record<string, { label: string; implemented: boolean; requires: string[]; supportsPix?: boolean; supportsPoint?: boolean }>;
 
 const providerLabels: Record<string, string> = {
   fake: 'Fake Provider',
+  mercado_pago_fake: 'Mercado Pago Fake',
   mercado_pago: 'Mercado Pago',
   asaas: 'Asaas',
   sicoob: 'Sicoob',
@@ -22,8 +23,17 @@ const emptyForm = {
   provider: 'fake' as PixProvider,
   pixKey: '',
   accessToken: '',
+  mpEnvironment: 'test',
   payerEmail: '',
+  supportsPix: true,
+  supportsPoint: false,
+  terminalId: '',
+  storeId: '',
+  posId: '',
+  defaultType: 'credit_card',
+  defaultInstallments: '1',
   apiKey: '',
+  active: true,
   isDefault: true,
 };
 
@@ -32,6 +42,8 @@ export default function PixSettings() {
   const [providers, setProviders] = useState<ProviderInfo>({});
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<PixAccount | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
 
   const loadData = async () => {
@@ -53,25 +65,76 @@ export default function PixSettings() {
   useEffect(() => { loadData(); }, []);
 
   const buildCredentials = () => {
-    if (form.provider === 'mercado_pago') return { accessToken: form.accessToken, payerEmail: form.payerEmail };
+    const capabilities = {
+      supportsPix: form.supportsPix,
+      supportsPoint: form.supportsPoint,
+    };
+    if (form.provider === 'mercado_pago') {
+      const credentials: Record<string, string | boolean> = {
+        ...capabilities,
+        mpEnvironment: form.mpEnvironment,
+        payerEmail: form.payerEmail.trim(),
+        terminalId: form.terminalId.trim(),
+        storeId: form.storeId.trim(),
+        posId: form.posId.trim(),
+        defaultType: form.defaultType,
+        defaultInstallments: form.defaultInstallments,
+      };
+      if (form.accessToken.trim()) credentials.accessToken = form.accessToken.trim();
+      return credentials;
+    }
     if (form.provider === 'asaas') return { apiKey: form.apiKey };
-    return {};
+    return capabilities;
+  };
+
+  const openCreate = () => {
+    setEditingAccount(null);
+    setForm({ ...emptyForm });
+    setIsOpen(true);
+  };
+
+  const openEdit = (account: PixAccount) => {
+    setEditingAccount(account);
+    setForm({
+      ...emptyForm,
+      name: account.name,
+      provider: account.provider,
+      pixKey: account.pixKey || '',
+      supportsPix: account.supportsPix !== false,
+      supportsPoint: Boolean(account.supportsPoint),
+      terminalId: account.terminalId || '',
+      storeId: account.storeId || '',
+      posId: account.posId || '',
+      active: Boolean(account.active),
+      isDefault: Boolean(account.isDefault),
+    });
+    setIsOpen(true);
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await apiRequest('/pix/accounts', {
-        method: 'POST',
+      if (form.provider === 'mercado_pago' && !editingAccount && !form.accessToken.trim()) {
+        alert('Informe o Access Token do Mercado Pago.');
+        return;
+      }
+      if (form.provider === 'mercado_pago' && form.supportsPoint && !form.terminalId.trim()) {
+        alert('Informe o Terminal ID do Mercado Pago Point.');
+        return;
+      }
+      await apiRequest(editingAccount ? `/pix/accounts/${editingAccount.id}` : '/pix/accounts', {
+        method: editingAccount ? 'PUT' : 'POST',
         body: {
           name: form.name,
           provider: form.provider,
           pixKey: form.pixKey,
           credentials: buildCredentials(),
+          active: form.active,
           isDefault: form.isDefault,
         },
       });
       setIsOpen(false);
+      setEditingAccount(null);
       setForm({ ...emptyForm });
       loadData();
     } catch (err) {
@@ -80,7 +143,7 @@ export default function PixSettings() {
   };
 
   const removeAccount = async (account: PixAccount) => {
-    if (!confirm(`Remover a conta Pix "${account.name}"?`)) return;
+    if (!confirm(`Remover ou desativar a conta "${account.name}"?`)) return;
     try {
       await apiRequest(`/pix/accounts/${account.id}`, { method: 'DELETE' });
       loadData();
@@ -90,17 +153,24 @@ export default function PixSettings() {
   };
 
   const provider = providers[form.provider];
+  const visibleAccounts = showInactive ? accounts : accounts.filter(account => account.active);
+  const inactiveCount = accounts.filter(account => !account.active).length;
 
   return (
     <div className="page-container pix-settings-page">
       <div className="pix-settings-header">
         <div>
-          <h1><CreditCard size={24} /> Contas Pix</h1>
-          <p>Configure as contas recebedoras usadas pelo PDV para gerar QR Code e confirmar pagamentos.</p>
+          <h1><CreditCard size={24} /> Recebimentos</h1>
+          <p>Configure contas recebedoras usadas pelo PDV para Pix online e terminais de cartao.</p>
         </div>
         <div className="pix-settings-actions">
+          {inactiveCount > 0 && (
+            <button className="btn btn-secondary" onClick={() => setShowInactive(v => !v)}>
+              {showInactive ? 'Ocultar inativas' : `Ver inativas (${inactiveCount})`}
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={loadData}><RefreshCw size={16} /> Atualizar</button>
-          <button className="btn btn-primary" onClick={() => setIsOpen(true)}><Plus size={16} /> Nova Conta Pix</button>
+          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Nova Conta</button>
         </div>
       </div>
 
@@ -109,15 +179,21 @@ export default function PixSettings() {
       ) : accounts.length === 0 ? (
         <div className="pix-empty">
           <CreditCard size={38} />
-          <p>Nenhuma conta Pix configurada.</p>
-          <button className="btn btn-primary" onClick={() => setIsOpen(true)}><Plus size={16} /> Criar primeira conta</button>
+          <p>Nenhuma conta de recebimento configurada.</p>
+          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Criar primeira conta</button>
+        </div>
+      ) : visibleAccounts.length === 0 ? (
+        <div className="pix-empty">
+          <CreditCard size={38} />
+          <p>Nenhuma conta ativa. Use o botão de inativas para consultar o histórico.</p>
+          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Nova conta ativa</button>
         </div>
       ) : (
         <div className="pix-account-grid">
-          {accounts.map(account => {
+          {visibleAccounts.map(account => {
             const info = providers[account.provider];
             return (
-              <div className="pix-account-card" key={account.id}>
+              <div className={`pix-account-card ${account.active ? '' : 'inactive'}`} key={account.id}>
                 <div className="pix-account-top">
                   <div>
                     <h3>{account.name}</h3>
@@ -126,8 +202,14 @@ export default function PixSettings() {
                   {account.isDefault ? <span className="pix-default"><CheckCircle2 size={13} /> Padrao</span> : null}
                 </div>
                 <div className="pix-account-meta">
-                  <span>Chave Pix</span>
-                  <strong>{account.pixKey || 'Gerenciada pelo provider'}</strong>
+                  <span>Recursos</span>
+                  <strong>
+                    {[
+                      account.supportsPix !== false ? 'Pix' : null,
+                      account.supportsPoint ? `Point${account.terminalId ? ` (${account.terminalId})` : ''}` : null,
+                    ].filter(Boolean).join(' + ') || 'Sem recurso ativo'}
+                  </strong>
+                  {account.pixKey ? <small>Chave Pix: {account.pixKey}</small> : null}
                 </div>
                 <div className="pix-account-status">
                   {info?.implemented ? (
@@ -137,14 +219,17 @@ export default function PixSettings() {
                   )}
                   <span>{account.active ? 'Ativa' : 'Inativa'}</span>
                 </div>
-                <button className="btn btn-danger btn-sm" onClick={() => removeAccount(account)}><Trash2 size={14} /> Remover</button>
+                <div className="pix-account-actions">
+                  <button className="btn btn-secondary btn-sm" onClick={() => openEdit(account)}><Pencil size={14} /> Editar</button>
+                  <button className="btn btn-danger btn-sm" onClick={() => removeAccount(account)}><Trash2 size={14} /> Remover</button>
+                </div>
               </div>
             );
           })}
         </div>
       )}
 
-      <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title="Nova Conta Pix">
+      <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={editingAccount ? 'Editar conta de recebimento' : 'Nova conta de recebimento'}>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Nome interno *</label>
@@ -165,16 +250,70 @@ export default function PixSettings() {
             </div>
           </div>
 
+          {['fake', 'mercado_pago_fake', 'mercado_pago'].includes(form.provider) && (
+            <div className="pix-capability-row">
+              <label className="pix-checkbox compact">
+                <input type="checkbox" checked={form.supportsPix} onChange={e => setForm(p => ({ ...p, supportsPix: e.target.checked }))} />
+                Usar para Pix online
+              </label>
+              <label className="pix-checkbox compact">
+                <input type="checkbox" checked={form.supportsPoint} onChange={e => setForm(p => ({ ...p, supportsPoint: e.target.checked }))} />
+                Usar terminal/cartao
+              </label>
+            </div>
+          )}
+
           {form.provider === 'mercado_pago' && (
             <>
               <div className="form-group">
-                <label>Access Token Mercado Pago *</label>
-                <input className="form-control" required value={form.accessToken} onChange={e => setForm(p => ({ ...p, accessToken: e.target.value }))} placeholder="APP_USR-..." />
+                <label>{editingAccount ? 'Novo Access Token Mercado Pago' : 'Access Token Mercado Pago *'}</label>
+                <input className="form-control" required={!editingAccount} value={form.accessToken} onChange={e => setForm(p => ({ ...p, accessToken: e.target.value }))} placeholder={editingAccount ? 'Deixe em branco para manter o token salvo' : 'TEST-...'} />
+              </div>
+              <div className="form-group">
+                <label>Ambiente Mercado Pago</label>
+                <select className="form-control" value={form.mpEnvironment} onChange={e => setForm(p => ({ ...p, mpEnvironment: e.target.value }))}>
+                  <option value="test">Teste</option>
+                  <option value="production">Producao</option>
+                </select>
               </div>
               <div className="form-group">
                 <label>E-mail do pagador padrao</label>
-                <input className="form-control" type="email" value={form.payerEmail} onChange={e => setForm(p => ({ ...p, payerEmail: e.target.value }))} placeholder="cliente@example.com" />
+                <input className="form-control" type="email" value={form.payerEmail} onChange={e => setForm(p => ({ ...p, payerEmail: e.target.value }))} placeholder="Use o e-mail do comprador de teste no ambiente de teste" />
               </div>
+              <div className="pix-provider-note">
+                Em teste, o Mercado Pago exige e-mail com @testuser.com. Se deixar vazio, o sistema usa test@testuser.com automaticamente.
+              </div>
+              {form.supportsPoint && (
+                <>
+                  <div className="form-group">
+                    <label>Terminal ID Point *</label>
+                    <input className="form-control" required value={form.terminalId} onChange={e => setForm(p => ({ ...p, terminalId: e.target.value }))} placeholder="NEWLAND_N950__N950NCB801293324" />
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Store ID</label>
+                      <input className="form-control" value={form.storeId} onChange={e => setForm(p => ({ ...p, storeId: e.target.value }))} placeholder="Opcional" />
+                    </div>
+                    <div className="form-group">
+                      <label>POS ID</label>
+                      <input className="form-control" value={form.posId} onChange={e => setForm(p => ({ ...p, posId: e.target.value }))} placeholder="Opcional" />
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Tipo padrao</label>
+                      <select className="form-control" value={form.defaultType} onChange={e => setForm(p => ({ ...p, defaultType: e.target.value }))}>
+                        <option value="credit_card">Credito</option>
+                        <option value="debit_card">Debito</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Parcelas padrao</label>
+                      <input className="form-control" type="number" min="1" max="12" value={form.defaultInstallments} onChange={e => setForm(p => ({ ...p, defaultInstallments: e.target.value }))} />
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
 
@@ -195,6 +334,13 @@ export default function PixSettings() {
             <input type="checkbox" checked={form.isDefault} onChange={e => setForm(p => ({ ...p, isDefault: e.target.checked }))} />
             Usar como conta padrao do PDV
           </label>
+
+          {editingAccount && (
+            <label className="pix-checkbox">
+              <input type="checkbox" checked={form.active} onChange={e => setForm(p => ({ ...p, active: e.target.checked }))} />
+              Conta ativa
+            </label>
+          )}
 
           <div className="form-actions">
             <button type="button" className="btn btn-secondary" onClick={() => setIsOpen(false)}>Cancelar</button>

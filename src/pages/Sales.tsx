@@ -4,7 +4,7 @@ import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
 import { apiRequest } from '../lib/api';
 import Modal from '../components/Modal';
-import type { PixAccount, PixTransaction, Product, SaleItem } from '../types';
+import type { CardTransaction, PixAccount, PixTransaction, Product, SaleItem } from '../types';
 import './Sales.css';
 
 export default function Sales() {
@@ -24,21 +24,27 @@ export default function Sales() {
   const [paymentMethod, setPaymentMethod] = useState<'money' | 'card' | 'pix'>('money');
   const [pixAccounts, setPixAccounts] = useState<PixAccount[]>([]);
   const [selectedPixAccountId, setSelectedPixAccountId] = useState('');
+  const [selectedCardAccountId, setSelectedCardAccountId] = useState('');
   const [pixTransaction, setPixTransaction] = useState<PixTransaction | null>(null);
   const [pixWaiting, setPixWaiting] = useState(false);
+  const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
+  const [cardWaiting, setCardWaiting] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { products, addProduct } = useInventoryStore();
-  const { addSale, createPixPayment, checkPixPayment } = useSalesStore();
+  const { addSale, createPixPayment, checkPixPayment, createCardPayment, checkCardPayment } = useSalesStore();
 
   useEffect(() => {
     apiRequest<PixAccount[]>('/pix/accounts')
       .then(accounts => {
         const active = accounts.filter(a => a.active);
         setPixAccounts(active);
-        setSelectedPixAccountId(active.find(a => a.isDefault)?.id || active[0]?.id || '');
+        const pixReady = active.filter(a => a.supportsPix !== false);
+        const cardReady = active.filter(a => a.supportsPoint);
+        setSelectedPixAccountId(pixReady.find(a => a.isDefault)?.id || pixReady[0]?.id || '');
+        setSelectedCardAccountId(cardReady.find(a => a.isDefault)?.id || cardReady[0]?.id || '');
       })
       .catch(() => setPixAccounts([]));
   }, []);
@@ -63,6 +69,8 @@ export default function Sales() {
 
   const cartTotal = useMemo(() => cart.reduce((total, item) => total + item.totalPrice, 0), [cart]);
   const cartItemCount = useMemo(() => cart.reduce((total, item) => total + item.quantity, 0), [cart]);
+  const availablePixAccounts = useMemo(() => pixAccounts.filter(a => a.supportsPix !== false), [pixAccounts]);
+  const availableCardAccounts = useMemo(() => pixAccounts.filter(a => a.supportsPoint), [pixAccounts]);
 
   const addToCart = (product: Product) => {
     if (product.stock <= 0) return;
@@ -145,6 +153,14 @@ export default function Sales() {
       }
       return;
     }
+    if (paymentMethod === 'card' && selectedCardAccountId) {
+      const transaction = await createCardPayment(cart, cartTotal, selectedCardAccountId);
+      if (transaction) {
+        setCardTransaction(transaction);
+        setCardWaiting(true);
+      }
+      return;
+    }
     await addSale(cart, cartTotal, paymentMethod);
     setCart([]);
     setSearchTerm('');
@@ -174,6 +190,29 @@ export default function Sales() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [pixWaiting, pixTransaction?.id, checkPixPayment]);
+
+  useEffect(() => {
+    if (!cardWaiting || !cardTransaction?.id) return;
+    const timer = window.setInterval(async () => {
+      const updated = await checkCardPayment(cardTransaction.id);
+      if (!updated) return;
+      setCardTransaction(updated);
+      if (updated.status === 'paid') {
+        window.clearInterval(timer);
+        setCardWaiting(false);
+        setCart([]);
+        setSearchTerm('');
+        setPaymentMethod('money');
+        setCardTransaction(null);
+        barcodeRef.current?.focus();
+      }
+      if (updated.status === 'cancelled' || updated.status === 'expired') {
+        window.clearInterval(timer);
+        setCardWaiting(false);
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [cardWaiting, cardTransaction?.id, checkCardPayment]);
 
   const handleQuickProductSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -365,12 +404,29 @@ export default function Sales() {
                   <div className="pix-account-select">
                     <label>Conta Pix recebedora</label>
                     <select value={selectedPixAccountId} onChange={e => setSelectedPixAccountId(e.target.value)}>
-                      {pixAccounts.length === 0 ? (
+                      {availablePixAccounts.length === 0 ? (
                         <option value="">Nenhuma conta Pix ativa</option>
-                      ) : pixAccounts.map(account => (
+                      ) : availablePixAccounts.map(account => (
                         <option key={account.id} value={account.id}>{account.name}</option>
                       ))}
                     </select>
+                  </div>
+                )}
+                {paymentMethod === 'card' && availableCardAccounts.length > 0 && (
+                  <div className="pix-account-select">
+                    <label>Terminal de cartão</label>
+                    <select value={selectedCardAccountId} onChange={e => setSelectedCardAccountId(e.target.value)}>
+                      {availableCardAccounts.map(account => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}{account.terminalId ? ` - ${account.terminalId}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {paymentMethod === 'card' && availableCardAccounts.length === 0 && (
+                  <div className="card-terminal-note">
+                    Sem terminal integrado. A venda em cartao sera registrada diretamente para teste.
                   </div>
                 )}
               </div>
@@ -429,6 +485,29 @@ export default function Sales() {
 
             <div className="pix-waiting-note">
               {pixWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A cobranca nao esta mais em consulta automatica.'}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={!!cardTransaction} onClose={() => !cardWaiting && setCardTransaction(null)} title="Pagamento no terminal">
+        {cardTransaction && (
+          <div className="pix-payment-modal">
+            <div className="pix-payment-status">
+              <CreditCard size={22} />
+              <div>
+                <strong>{cardTransaction.status === 'paid' ? 'Pagamento confirmado' : 'Aguardando terminal'}</strong>
+                <span>{formatCurrency(cardTransaction.amount)}</span>
+              </div>
+            </div>
+
+            <div className="pix-qr-placeholder">
+              <CreditCard size={56} />
+              <span>{cardTransaction.terminalId ? `Venda enviada para ${cardTransaction.terminalId}` : 'Venda enviada para o terminal'}</span>
+            </div>
+
+            <div className="pix-waiting-note">
+              {cardWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A transacao nao esta mais em consulta automatica.'}
             </div>
           </div>
         )}

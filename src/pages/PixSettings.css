@@ -48,6 +48,11 @@
   padding: 1rem;
 }
 
+.pix-account-card.inactive {
+  opacity: 0.68;
+  border-style: dashed;
+}
+
 .pix-account-top {
   display: flex;
   justify-content: space-between;
@@ -99,11 +104,23 @@
   word-break: break-word;
 }
 
+.pix-account-meta small {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  word-break: break-word;
+}
+
 .pix-account-status {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 1rem;
+}
+
+.pix-account-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .pix-empty {
@@ -134,6 +151,22 @@
   color: var(--text-primary);
   font-weight: 600;
   margin: 0.75rem 0 1rem;
+}
+
+.pix-checkbox.compact {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.pix-capability-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-main);
+  margin-bottom: 1rem;
 }
 
 @media (max-width: 768px) {

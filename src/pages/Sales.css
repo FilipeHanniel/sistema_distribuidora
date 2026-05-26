@@ -568,6 +568,17 @@
   padding: 0.65rem 0.75rem;
 }
 
+.card-terminal-note {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius);
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .pix-payment-modal {
   display: flex;
   flex-direction: column;
