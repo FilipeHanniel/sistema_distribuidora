@@ -30,6 +30,13 @@ const formatDate = (iso: string) =>
 const formatDateShort = (iso: string) =>
   new Date(iso).toLocaleDateString('pt-BR');
 
+const providerLabel = (provider?: string) => {
+  if (provider === 'mercado_pago') return 'Mercado Pago';
+  if (provider === 'mercado_pago_fake') return 'Mercado Pago Fake';
+  if (provider === 'fake') return 'Fake Provider';
+  return provider || 'Nao informado';
+};
+
 export default function SalesHistory() {
   const { sales, fetchSales } = useSalesStore();
   const { isOperador } = useAuthStore();
@@ -276,6 +283,30 @@ export default function SalesHistory() {
                 </div>
                 {isOpen && (
                   <div className="receipt-detail">
+                    {sale.paymentTransaction && (
+                      <div className="payment-confirmation-box">
+                        <div>
+                          <span>Confirmacao do pagamento</span>
+                          <strong>
+                            {sale.paymentTransaction.confirmationSource === 'provider'
+                              ? 'Confirmado pelo provedor'
+                              : 'Confirmacao simulada'}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Provider</span>
+                          <strong>{providerLabel(sale.paymentTransaction.provider)}</strong>
+                        </div>
+                        <div>
+                          <span>Order/Transacao</span>
+                          <strong>{sale.paymentTransaction.providerTransactionId || sale.paymentTransaction.id}</strong>
+                        </div>
+                        <div>
+                          <span>Confirmado em</span>
+                          <strong>{sale.paymentTransaction.paidAt ? formatDate(sale.paymentTransaction.paidAt) : 'Pendente'}</strong>
+                        </div>
+                      </div>
+                    )}
                     <table className="receipt-items-table">
                       <thead>
                         <tr>

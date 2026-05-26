@@ -214,6 +214,40 @@ const sanitizePixAccount = (account) => {
   };
 };
 
+const sanitizePaymentTransaction = (transaction) => {
+  if (!transaction) return null;
+  let payload = {};
+  try { payload = JSON.parse(transaction.payload || '{}'); } catch {}
+  const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
+  const payment = providerPayload.transactions?.payments?.[0] || {};
+  return {
+    id: transaction.id,
+    provider: transaction.provider,
+    providerTransactionId: transaction.providerTransactionId,
+    providerPaymentId: payload.providerPaymentId || payment.id || null,
+    status: transaction.status,
+    paymentMethod: transaction.paymentMethod,
+    amount: transaction.amount,
+    paidAt: transaction.paidAt,
+    createdAt: transaction.createdAt,
+    environment: providerPayload.api_response?.status ? 'mercado_pago' : undefined,
+    providerStatus: providerPayload.status || payment.status || null,
+    providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
+    confirmationSource: ['fake', 'mercado_pago_fake'].includes(transaction.provider) ? 'simulated' : 'provider',
+  };
+};
+
+const getPaymentTransactionForSale = (saleId, estId) => {
+  const transaction = db.prepare(`
+    SELECT *
+    FROM payment_transactions
+    WHERE saleId = ? AND establishmentId = ?
+    ORDER BY updatedAt DESC, createdAt DESC
+    LIMIT 1
+  `).get(saleId, estId);
+  return sanitizePaymentTransaction(transaction);
+};
+
 const sanitizeFiscalSettings = (settings) => {
   if (!settings) return null;
   return {
@@ -948,6 +982,7 @@ app.get('/api/sales', authenticateToken, isGestorOrAbove, (req, res) => {
     const populatedSales = sales.map(sale => ({
       ...sale,
       items: db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(sale.id),
+      paymentTransaction: getPaymentTransactionForSale(sale.id, sale.establishmentId),
     }));
     res.json(populatedSales);
   } catch (err) {
@@ -970,6 +1005,7 @@ app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
     res.json(sales.map(sale => ({
       ...sale,
       items: db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(sale.id),
+      paymentTransaction: getPaymentTransactionForSale(sale.id, sale.establishmentId),
     })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1492,6 +1528,9 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
       fiscalDocument,
       paidAt,
       amount: transaction.amount,
+      provider: transaction.provider,
+      providerTransactionId: transaction.providerTransactionId,
+      paymentConfirmation: saleId ? getPaymentTransactionForSale(saleId, estId) : null,
       expiresAt: transaction.expiresAt,
     });
   } catch (err) {
@@ -1549,6 +1588,9 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       fiscalDocument,
       paidAt,
       amount: transaction.amount,
+      provider: transaction.provider,
+      providerTransactionId: transaction.providerTransactionId,
+      paymentConfirmation: saleId ? getPaymentTransactionForSale(saleId, estId) : null,
       qrCode: transaction.qrCode,
       qrCodeBase64: transaction.qrCodeBase64,
       ticketUrl: transaction.ticketUrl,

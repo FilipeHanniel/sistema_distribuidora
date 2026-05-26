@@ -32,6 +32,7 @@ export interface Sale {
   totalAmount: number;
   paymentMethod: 'money' | 'card' | 'pix';
   fiscalStatus?: string;
+  paymentTransaction?: PaymentConfirmation | null;
   establishmentId?: string;
   createdAt: string;
 }
@@ -95,6 +96,7 @@ export interface PixTransaction {
   ticketUrl?: string;
   expiresAt?: string;
   pixAccount?: PixAccount;
+  paymentConfirmation?: PaymentConfirmation | null;
 }
 
 export interface CardTransaction {
@@ -108,6 +110,22 @@ export interface CardTransaction {
   providerTransactionId?: string;
   terminalId?: string;
   expiresAt?: string;
+  paymentConfirmation?: PaymentConfirmation | null;
+}
+
+export interface PaymentConfirmation {
+  id: string;
+  provider: string;
+  providerTransactionId?: string;
+  providerPaymentId?: string | null;
+  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  paymentMethod: 'pix' | 'card';
+  amount: number;
+  paidAt?: string;
+  createdAt: string;
+  providerStatus?: string | null;
+  providerStatusDetail?: string | null;
+  confirmationSource: 'provider' | 'simulated';
 }
 
 export interface AppNotification {
