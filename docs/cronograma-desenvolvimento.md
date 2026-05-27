@@ -9,9 +9,9 @@ Status: em andamento
 Objetivo: garantir que o sistema rode com confianca em ambiente real, sem depender de ajustes manuais.
 
 - Revisar deploy no VPS com PM2, Nginx, `.env`, banco SQLite e certificados.
-- Documentar passo a passo de atualizacao do servidor.
+- Documentar passo a passo de atualizacao do servidor. [docs/deploy-vps.md](deploy-vps.md)
 - Validar backups do `backend/banco.sqlite`.
-- Criar rotina simples de backup automatico diario.
+- Criar rotina simples de backup automatico diario. [docs/backup-sqlite.md](backup-sqlite.md)
 - Separar claramente dados versionados e dados privados/locais.
 - Testar fluxo completo: venda, pagamento, fiscal fake, comprovante e historico.
 
@@ -119,4 +119,3 @@ Concluir a Fase 1 antes de expandir muito:
 2. Documentar o deploy e atualizacao.
 3. Validar novamente venda + Pix Mercado Pago teste + fiscal fake + comprovante.
 4. Depois disso, avançar para webhook Mercado Pago.
-
