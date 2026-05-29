@@ -455,7 +455,20 @@ const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, 
   if (settings?.enabled && settings?.autoIssueOnPayment) {
     const document = upsertFiscalDocumentForSale(saleId, estId);
     if (['simulated', 'sefaz_go'].includes(settings.providerMode || 'simulated')) {
-      fiscalDocument = await issueFiscalDocument(document.id, estId);
+      try {
+        fiscalDocument = await issueFiscalDocument(document.id, estId);
+      } catch (err) {
+        const failedAt = new Date().toISOString();
+        db.prepare(`
+          UPDATE fiscal_documents
+          SET status = 'rejected', error = ?, updatedAt = ?
+          WHERE id = ? AND establishmentId = ?
+        `).run(err.message, failedAt, document.id, estId);
+        db.prepare('UPDATE sales SET fiscalStatus = ? WHERE id = ? AND establishmentId = ?')
+          .run('rejected', saleId, estId);
+        fiscalDocument = db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(document.id);
+        console.error('[Fiscal Issue Error]', err.message);
+      }
     } else {
       fiscalDocument = document;
     }

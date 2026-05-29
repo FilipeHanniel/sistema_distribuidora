@@ -29,6 +29,7 @@ export default function Sales() {
   const [pixWaiting, setPixWaiting] = useState(false);
   const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
   const [cardWaiting, setCardWaiting] = useState(false);
+  const [checkoutProcessing, setCheckoutProcessing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -144,28 +145,35 @@ export default function Sales() {
   };
 
   const handleCheckout = async () => {
-    if (cart.length === 0) return;
-    if (paymentMethod === 'pix') {
-      const transaction = await createPixPayment(cart, cartTotal, selectedPixAccountId || undefined);
-      if (transaction) {
-        setPixTransaction(transaction);
-        setPixWaiting(true);
+    if (cart.length === 0 || checkoutProcessing || pixWaiting || cardWaiting) return;
+    setCheckoutProcessing(true);
+    try {
+      if (paymentMethod === 'pix') {
+        const transaction = await createPixPayment(cart, cartTotal, selectedPixAccountId || undefined);
+        if (transaction) {
+          setPixTransaction(transaction);
+          setPixWaiting(true);
+        }
+        return;
       }
-      return;
-    }
-    if (paymentMethod === 'card' && selectedCardAccountId) {
-      const transaction = await createCardPayment(cart, cartTotal, selectedCardAccountId);
-      if (transaction) {
-        setCardTransaction(transaction);
-        setCardWaiting(true);
+      if (paymentMethod === 'card' && selectedCardAccountId) {
+        const transaction = await createCardPayment(cart, cartTotal, selectedCardAccountId);
+        if (transaction) {
+          setCardTransaction(transaction);
+          setCardWaiting(true);
+        }
+        return;
       }
-      return;
+      const saleId = await addSale(cart, cartTotal, paymentMethod);
+      if (saleId) {
+        setCart([]);
+        setSearchTerm('');
+        setPaymentMethod('money');
+        barcodeRef.current?.focus();
+      }
+    } finally {
+      setCheckoutProcessing(false);
     }
-    await addSale(cart, cartTotal, paymentMethod);
-    setCart([]);
-    setSearchTerm('');
-    setPaymentMethod('money');
-    barcodeRef.current?.focus();
   };
 
   useEffect(() => {
@@ -181,11 +189,13 @@ export default function Sales() {
         setSearchTerm('');
         setPaymentMethod('money');
         setPixTransaction(null);
+        setCheckoutProcessing(false);
         barcodeRef.current?.focus();
       }
       if (updated.status === 'cancelled' || updated.status === 'expired') {
         window.clearInterval(timer);
         setPixWaiting(false);
+        setCheckoutProcessing(false);
       }
     }, 3000);
     return () => window.clearInterval(timer);
@@ -204,11 +214,13 @@ export default function Sales() {
         setSearchTerm('');
         setPaymentMethod('money');
         setCardTransaction(null);
+        setCheckoutProcessing(false);
         barcodeRef.current?.focus();
       }
       if (updated.status === 'cancelled' || updated.status === 'expired') {
         window.clearInterval(timer);
         setCardWaiting(false);
+        setCheckoutProcessing(false);
       }
     }, 3000);
     return () => window.clearInterval(timer);
@@ -439,11 +451,11 @@ export default function Sales() {
 
             <button
               className="btn-checkout"
-              disabled={cart.length === 0 || (paymentMethod === 'pix' && !selectedPixAccountId)}
+              disabled={cart.length === 0 || checkoutProcessing || pixWaiting || cardWaiting || (paymentMethod === 'pix' && !selectedPixAccountId)}
               onClick={handleCheckout}
             >
               <CheckCircle size={20} />
-              Finalizar Venda
+              {checkoutProcessing || pixWaiting || cardWaiting ? 'Processando...' : 'Finalizar Venda'}
             </button>
           </div>
         </div>
