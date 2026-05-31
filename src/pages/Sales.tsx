@@ -30,6 +30,7 @@ export default function Sales() {
   const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
   const [cardWaiting, setCardWaiting] = useState(false);
   const [checkoutProcessing, setCheckoutProcessing] = useState(false);
+  const [paymentPollingEnabled, setPaymentPollingEnabled] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -48,6 +49,9 @@ export default function Sales() {
         setSelectedCardAccountId(cardReady.find(a => a.isDefault)?.id || cardReady[0]?.id || '');
       })
       .catch(() => setPixAccounts([]));
+    apiRequest<{ pollingEnabled: boolean }>('/payments/config')
+      .then(config => setPaymentPollingEnabled(config.pollingEnabled))
+      .catch(() => setPaymentPollingEnabled(true));
   }, []);
 
   const categories = useMemo(() => {
@@ -178,6 +182,7 @@ export default function Sales() {
 
   useEffect(() => {
     if (!pixWaiting || !pixTransaction?.id) return;
+    if (!paymentPollingEnabled) return;
     const timer = window.setInterval(async () => {
       const updated = await checkPixPayment(pixTransaction.id);
       if (!updated) return;
@@ -199,10 +204,11 @@ export default function Sales() {
       }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [pixWaiting, pixTransaction?.id, checkPixPayment]);
+  }, [pixWaiting, pixTransaction?.id, checkPixPayment, paymentPollingEnabled]);
 
   useEffect(() => {
     if (!cardWaiting || !cardTransaction?.id) return;
+    if (!paymentPollingEnabled) return;
     const timer = window.setInterval(async () => {
       const updated = await checkCardPayment(cardTransaction.id);
       if (!updated) return;
@@ -224,7 +230,7 @@ export default function Sales() {
       }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [cardWaiting, cardTransaction?.id, checkCardPayment]);
+  }, [cardWaiting, cardTransaction?.id, checkCardPayment, paymentPollingEnabled]);
 
   const handleQuickProductSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -496,7 +502,11 @@ export default function Sales() {
             )}
 
             <div className="pix-waiting-note">
-              {pixWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A cobranca nao esta mais em consulta automatica.'}
+              {pixWaiting
+                ? paymentPollingEnabled
+                  ? 'O sistema esta consultando a confirmacao automaticamente.'
+                  : 'Aguardando confirmacao via webhook do Mercado Pago.'
+                : 'A cobranca nao esta mais em consulta automatica.'}
             </div>
           </div>
         )}
@@ -519,7 +529,11 @@ export default function Sales() {
             </div>
 
             <div className="pix-waiting-note">
-              {cardWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A transacao nao esta mais em consulta automatica.'}
+              {cardWaiting
+                ? paymentPollingEnabled
+                  ? 'O sistema esta consultando a confirmacao automaticamente.'
+                  : 'Aguardando confirmacao via webhook do provedor.'
+                : 'A transacao nao esta mais em consulta automatica.'}
             </div>
           </div>
         )}

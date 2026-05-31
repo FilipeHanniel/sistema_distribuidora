@@ -40,6 +40,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-202
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET || '';
+const PAYMENT_POLLING_ENABLED = process.env.PAYMENT_POLLING_ENABLED !== 'false';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -1317,6 +1318,12 @@ app.get('/api/pix/providers', authenticateToken, isGestorOrAbove, (req, res) => 
   res.json(PROVIDERS);
 });
 
+app.get('/api/payments/config', authenticateToken, isTenantUser, (req, res) => {
+  res.json({
+    pollingEnabled: PAYMENT_POLLING_ENABLED,
+  });
+});
+
 app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
     if (req.user.role === 'superadmin') {
@@ -1643,7 +1650,7 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
     let paidAt = transaction.paidAt;
     let saleId = transaction.saleId;
 
-    if (status === 'pending') {
+    if (status === 'pending' && PAYMENT_POLLING_ENABLED) {
       const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
       if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
       const statusResult = await getPointProvider(account.provider).getStatus({
@@ -1716,7 +1723,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
     let paidAt = transaction.paidAt;
     let saleId = transaction.saleId;
 
-    if (status === 'pending') {
+    if (status === 'pending' && PAYMENT_POLLING_ENABLED) {
       const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
       if (!account) return res.status(404).json({ error: 'Conta Pix da transacao nao encontrada.' });
       const statusResult = await getPixProvider(account.provider).getStatus({

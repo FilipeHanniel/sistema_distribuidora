@@ -72,9 +72,18 @@ Para validar webhooks do Mercado Pago, configure no `.env`:
 
 ```env
 MERCADO_PAGO_WEBHOOK_SECRET=sua_chave_secreta_do_webhook
+PAYMENT_POLLING_ENABLED=true
 ```
 
 Essa chave fica em Mercado Pago Developers, na aplicacao, em Webhooks/Notificacoes.
+
+Para testar webhook sem a consulta automatica do PDV, use temporariamente:
+
+```env
+PAYMENT_POLLING_ENABLED=false
+```
+
+Em producao, o recomendado e manter `true`, usando webhook e polling como camadas complementares.
 
 ## Quando rodar build
 
