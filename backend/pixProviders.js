@@ -105,11 +105,8 @@ async function getFakePixStatus({ transaction }) {
 async function createMercadoPagoPixCharge({ amount, referenceId, credentials, description }) {
   const accessToken = getCredential(credentials, 'accessToken');
   if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
-  const isTest = credentials.mpEnvironment !== 'production';
   const configuredEmail = getCredential(credentials, 'payerEmail');
-  const payerEmail = isTest
-    ? (configuredEmail.includes('@testuser.com') ? configuredEmail : 'test@testuser.com')
-    : (configuredEmail || 'cliente@example.com');
+  const payerEmail = configuredEmail || 'cliente@example.com';
 
   const response = await fetch('https://api.mercadopago.com/v1/payments', {
     method: 'POST',
@@ -122,10 +119,7 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
       transaction_amount: Number(amount),
       description: description || `Venda ${referenceId}`,
       payment_method_id: 'pix',
-      payer: {
-        email: payerEmail,
-        first_name: isTest ? 'APRO' : (credentials.payerFirstName || 'Cliente'),
-      },
+      payer: { email: payerEmail },
       external_reference: referenceId,
     }),
   });
