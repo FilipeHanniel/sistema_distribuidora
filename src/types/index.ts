@@ -86,7 +86,7 @@ export interface PixAccount {
 
 export interface PixTransaction {
   id: string;
-  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  status: 'pending' | 'processing' | 'paid' | 'cancelled' | 'expired';
   saleId?: string;
   fiscalDocument?: FiscalDocument | null;
   paidAt?: string;
@@ -101,7 +101,7 @@ export interface PixTransaction {
 
 export interface CardTransaction {
   id: string;
-  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  status: 'pending' | 'processing' | 'paid' | 'cancelled' | 'expired';
   saleId?: string;
   fiscalDocument?: FiscalDocument | null;
   paidAt?: string;
@@ -118,7 +118,7 @@ export interface PaymentConfirmation {
   provider: string;
   providerTransactionId?: string;
   providerPaymentId?: string | null;
-  status: 'pending' | 'paid' | 'cancelled' | 'expired';
+  status: 'pending' | 'processing' | 'paid' | 'cancelled' | 'expired';
   paymentMethod: 'pix' | 'card';
   amount: number;
   paidAt?: string;
@@ -126,6 +126,7 @@ export interface PaymentConfirmation {
   providerStatus?: string | null;
   providerStatusDetail?: string | null;
   confirmationSource: 'provider' | 'simulated';
+  confirmationChannel?: 'polling' | 'webhook' | null;
 }
 
 export interface AppNotification {

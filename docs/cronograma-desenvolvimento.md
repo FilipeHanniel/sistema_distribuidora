@@ -25,7 +25,7 @@ Objetivo: deixar Pix e cartao preparados para uso real por estabelecimento.
 - Melhorar edicao de contas e ocultacao de contas inativas.
 - Finalizar Mercado Pago Pix em ambiente de teste.
 - Registrar confirmacao do provedor no comprovante.
-- Implementar webhook Mercado Pago para confirmacao passiva.
+- Implementar webhook Mercado Pago para confirmacao passiva. Em andamento no backend.
 - Criar painel de transacoes de pagamento.
 - Definir padrao para novos provedores: Asaas, Sicoob, Itau, Santander, Bradesco.
 

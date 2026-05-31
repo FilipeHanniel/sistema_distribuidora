@@ -153,6 +153,7 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
   const method = payment.payment_method || {};
   return {
     providerTransactionId: String(data.id),
+    providerPaymentId: payment.id ? String(payment.id) : null,
     status: normalizePointStatus('mercado_pago', data.status, data.transactions?.payments || []),
     qrCode: method.qr_code || '',
     qrCodeBase64: method.qr_code_base64 || '',

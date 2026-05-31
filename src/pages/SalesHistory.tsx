@@ -37,6 +37,12 @@ const providerLabel = (provider?: string) => {
   return provider || 'Nao informado';
 };
 
+const confirmationChannelLabel = (channel?: string | null) => {
+  if (channel === 'webhook') return 'Webhook';
+  if (channel === 'polling') return 'Consulta automatica';
+  return 'Nao identificado';
+};
+
 export default function SalesHistory() {
   const { sales, fetchSales } = useSalesStore();
   const { isOperador } = useAuthStore();
@@ -304,6 +310,10 @@ export default function SalesHistory() {
                         <div>
                           <span>Confirmado em</span>
                           <strong>{sale.paymentTransaction.paidAt ? formatDate(sale.paymentTransaction.paidAt) : 'Pendente'}</strong>
+                        </div>
+                        <div>
+                          <span>Canal</span>
+                          <strong>{confirmationChannelLabel(sale.paymentTransaction.confirmationChannel)}</strong>
                         </div>
                       </div>
                     )}

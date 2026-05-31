@@ -66,6 +66,16 @@ Estes arquivos precisam existir no servidor, mas nao devem ser versionados:
 - `backend/banco.sqlite`
 - `backend/certs/*.pfx`
 
+## Variaveis importantes para pagamentos
+
+Para validar webhooks do Mercado Pago, configure no `.env`:
+
+```env
+MERCADO_PAGO_WEBHOOK_SECRET=sua_chave_secreta_do_webhook
+```
+
+Essa chave fica em Mercado Pago Developers, na aplicacao, em Webhooks/Notificacoes.
+
 ## Quando rodar build
 
 Rode `npm run build` quando houver atualizacao de codigo do frontend/backend via Git.
@@ -113,4 +123,3 @@ No app, o caminho deve ser relativo, sem barra inicial:
 ```text
 backend/certs/fake-a1.pfx
 ```
-

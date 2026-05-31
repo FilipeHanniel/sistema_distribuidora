@@ -39,6 +39,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-2024';
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET || '';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -224,7 +225,7 @@ const sanitizePaymentTransaction = (transaction) => {
     id: transaction.id,
     provider: transaction.provider,
     providerTransactionId: transaction.providerTransactionId,
-    providerPaymentId: payload.providerPaymentId || payment.id || null,
+    providerPaymentId: transaction.providerPaymentId || payload.providerPaymentId || payment.id || null,
     status: transaction.status,
     paymentMethod: transaction.paymentMethod,
     amount: transaction.amount,
@@ -234,6 +235,7 @@ const sanitizePaymentTransaction = (transaction) => {
     providerStatus: providerPayload.status || payment.status || null,
     providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
     confirmationSource: ['fake', 'mercado_pago_fake'].includes(transaction.provider) ? 'simulated' : 'provider',
+    confirmationChannel: payload.confirmationChannel || null,
   };
 };
 
@@ -246,6 +248,106 @@ const getPaymentTransactionForSale = (saleId, estId) => {
     LIMIT 1
   `).get(saleId, estId);
   return sanitizePaymentTransaction(transaction);
+};
+
+const parseMercadoPagoSignature = (signature = '') => {
+  return String(signature || '').split(',').reduce((acc, part) => {
+    const [key, value] = part.split('=');
+    if (key && value) acc[key.trim()] = value.trim();
+    return acc;
+  }, {});
+};
+
+const verifyMercadoPagoWebhookSignature = (req, dataId) => {
+  if (!MERCADO_PAGO_WEBHOOK_SECRET) return { checked: false, valid: true };
+  const xSignature = req.headers['x-signature'];
+  const xRequestId = req.headers['x-request-id'];
+  const parts = parseMercadoPagoSignature(xSignature);
+  if (!parts.ts || !parts.v1 || !xRequestId || !dataId) return { checked: true, valid: false };
+  const manifest = `id:${dataId};request-id:${xRequestId};ts:${parts.ts};`;
+  const expected = crypto.createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET).update(manifest).digest('hex');
+  const received = String(parts.v1);
+  const valid = expected.length === received.length
+    && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  return { checked: true, valid };
+};
+
+const findMercadoPagoTransaction = (dataId) => {
+  if (!dataId) return null;
+  return db.prepare(`
+    SELECT *
+    FROM payment_transactions
+    WHERE provider = 'mercado_pago'
+      AND (
+        providerTransactionId = ?
+        OR providerPaymentId = ?
+        OR payload LIKE ?
+      )
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `).get(dataId, dataId, `%${dataId}%`);
+};
+
+const refreshTransactionFromProvider = async (transaction, userId = null, confirmationChannel = 'polling') => {
+  const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+    .get(transaction.pixAccountId, transaction.establishmentId);
+  if (!account) throw new Error('Conta da transacao nao encontrada.');
+
+  const provider = transaction.paymentMethod === 'card'
+    ? getPointProvider(account.provider)
+    : getPixProvider(account.provider);
+  const statusResult = await provider.getStatus({
+    transaction,
+    credentials: decodeCredentials(account.credentials),
+  });
+
+  const storedPayload = JSON.parse(transaction.payload || '{}');
+  const providerPayment = statusResult.payload?.transactions?.payments?.[0] || {};
+  const providerPaymentId = transaction.providerPaymentId || storedPayload.providerPaymentId || providerPayment.id || null;
+  const status = statusResult.status;
+  const paidAt = statusResult.paidAt || transaction.paidAt || null;
+  const now = new Date().toISOString();
+
+  db.prepare(`
+    UPDATE payment_transactions
+    SET status = CASE WHEN status = 'processing' THEN status ELSE ? END,
+        paidAt = ?, providerPaymentId = ?, updatedAt = ?, payload = ?
+    WHERE id = ?
+  `).run(status, paidAt, providerPaymentId, now, JSON.stringify({
+    ...storedPayload,
+    providerPaymentId,
+    latestProviderPayload: statusResult.payload || null,
+    latestWebhookRefreshAt: now,
+    confirmationChannel: status === 'paid' ? confirmationChannel : storedPayload.confirmationChannel || null,
+  }), transaction.id);
+
+  let saleId = transaction.saleId;
+  if (status === 'paid' && !saleId) {
+    const claim = db.prepare(`
+      UPDATE payment_transactions
+      SET status = 'processing', updatedAt = ?
+      WHERE id = ? AND saleId IS NULL AND status IN ('pending', 'paid')
+    `).run(new Date().toISOString(), transaction.id);
+    if (!claim.changes) {
+      return db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+    }
+    const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+    const freshPayload = JSON.parse(fresh.payload || '{}');
+    const storedItems = freshPayload.items || [];
+    validateSaleItemsForTenant(storedItems, transaction.establishmentId);
+    const saleResult = await createPaidSale(
+      storedItems,
+      fresh.amount,
+      fresh.paymentMethod,
+      userId || 'webhook-mercado-pago',
+      transaction.establishmentId
+    );
+    saleId = saleResult.saleId;
+    db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
+      .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+  }
+
+  return db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
 };
 
 const sanitizeFiscalSettings = (settings) => {
@@ -1175,6 +1277,42 @@ app.patch('/api/fiscal/documents/:id/printed', authenticateToken, isGestorOrAbov
   }
 });
 
+app.post('/api/webhooks/mercado-pago', async (req, res) => {
+  const dataId = String(req.query['data.id'] || req.body?.data?.id || req.body?.id || '').trim();
+  const eventType = String(req.query.type || req.body?.type || req.body?.topic || '').trim();
+  try {
+    const signature = verifyMercadoPagoWebhookSignature(req, dataId);
+    if (!signature.valid) {
+      console.warn('[Mercado Pago Webhook] assinatura invalida', { dataId, eventType });
+      return res.status(401).json({ received: false, error: 'Assinatura invalida.' });
+    }
+
+    if (!dataId) {
+      console.warn('[Mercado Pago Webhook] notificacao sem data.id', { body: req.body, query: req.query });
+      return res.status(200).json({ received: true, matched: false });
+    }
+
+    const transaction = findMercadoPagoTransaction(dataId);
+    if (!transaction) {
+      console.warn('[Mercado Pago Webhook] transacao nao encontrada', { dataId, eventType });
+      return res.status(200).json({ received: true, matched: false });
+    }
+
+    const updated = await refreshTransactionFromProvider(transaction, null, 'webhook');
+    res.status(200).json({
+      received: true,
+      matched: true,
+      transactionId: updated.id,
+      status: updated.status,
+      saleId: updated.saleId || null,
+      signatureChecked: signature.checked,
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Webhook Error]', err.message);
+    res.status(500).json({ received: false, error: err.message });
+  }
+});
+
 app.get('/api/pix/providers', authenticateToken, isGestorOrAbove, (req, res) => {
   res.json(PROVIDERS);
 });
@@ -1392,15 +1530,16 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
 
     db.prepare(`
       INSERT INTO payment_transactions (
-        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
+        id, establishmentId, pixAccountId, provider, providerTransactionId, providerPaymentId, status, amount, paymentMethod,
         qrCode, qrCodeBase64, ticketUrl, payload, expiresAt, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pix', ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pix', ?, ?, ?, ?, ?, ?, ?)
     `).run(
       transactionId,
       estId,
       account.id,
       account.provider,
       charge.providerTransactionId,
+      charge.providerPaymentId || null,
       charge.status,
       totalAmount,
       charge.qrCode || '',
@@ -1460,15 +1599,16 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
 
     db.prepare(`
       INSERT INTO payment_transactions (
-        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
+        id, establishmentId, pixAccountId, provider, providerTransactionId, providerPaymentId, status, amount, paymentMethod,
         payload, expiresAt, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'card', ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'card', ?, ?, ?, ?)
     `).run(
       transactionId,
       estId,
       account.id,
       account.provider,
       order.providerTransactionId,
+      order.providerPaymentId || null,
       order.status,
       totalAmount,
       JSON.stringify({ items, providerPaymentId: order.providerPaymentId || null, providerPayload: order.payload || null }),
@@ -1512,14 +1652,26 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
       });
       status = statusResult.status;
       paidAt = statusResult.paidAt || paidAt;
-      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
+      db.prepare("UPDATE payment_transactions SET status = CASE WHEN status = 'processing' THEN status ELSE ? END, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?")
         .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
           ...JSON.parse(transaction.payload || '{}'),
           latestProviderPayload: statusResult.payload || null,
+          confirmationChannel: status === 'paid' ? 'polling' : JSON.parse(transaction.payload || '{}').confirmationChannel || null,
         }), transaction.id);
     }
 
     if (status === 'paid' && !saleId) {
+      const claim = db.prepare(`
+        UPDATE payment_transactions
+        SET status = 'processing', updatedAt = ?
+        WHERE id = ? AND saleId IS NULL AND status IN ('pending', 'paid')
+      `).run(new Date().toISOString(), transaction.id);
+      if (!claim.changes) {
+        const claimed = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+        saleId = claimed.saleId;
+        status = claimed.status;
+        paidAt = claimed.paidAt || paidAt;
+      } else {
       const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
       const stored = JSON.parse(fresh.payload || '{}');
       const storedItems = stored.items || [];
@@ -1528,6 +1680,8 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
       saleId = saleResult.saleId;
       db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
         .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+      status = 'paid';
+      }
     }
 
     const fiscalDocument = saleId
@@ -1572,14 +1726,26 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       status = statusResult.status;
       paidAt = statusResult.paidAt || paidAt;
 
-      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
+      db.prepare("UPDATE payment_transactions SET status = CASE WHEN status = 'processing' THEN status ELSE ? END, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?")
         .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
           ...JSON.parse(transaction.payload || '{}'),
           latestProviderPayload: statusResult.payload || null,
+          confirmationChannel: status === 'paid' ? 'polling' : JSON.parse(transaction.payload || '{}').confirmationChannel || null,
         }), transaction.id);
     }
 
     if (status === 'paid' && !saleId) {
+      const claim = db.prepare(`
+        UPDATE payment_transactions
+        SET status = 'processing', updatedAt = ?
+        WHERE id = ? AND saleId IS NULL AND status IN ('pending', 'paid')
+      `).run(new Date().toISOString(), transaction.id);
+      if (!claim.changes) {
+        const claimed = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+        saleId = claimed.saleId;
+        status = claimed.status;
+        paidAt = claimed.paidAt || paidAt;
+      } else {
       const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
       const stored = JSON.parse(fresh.payload || '{}');
       const storedItems = stored.items || [];
@@ -1588,6 +1754,8 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       saleId = saleResult.saleId;
       db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
         .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+      status = 'paid';
+      }
     }
 
     const fiscalDocument = saleId
