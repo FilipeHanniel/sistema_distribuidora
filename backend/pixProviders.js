@@ -111,7 +111,7 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
     ? (configuredEmail.includes('@testuser.com') ? configuredEmail : 'test@testuser.com')
     : (configuredEmail || 'cliente@example.com');
 
-  const response = await fetch('https://api.mercadopago.com/v1/orders', {
+  const response = await fetch('https://api.mercadopago.com/v1/payments', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -119,25 +119,14 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
       'X-Idempotency-Key': referenceId,
     },
     body: JSON.stringify({
-      type: 'online',
-      external_reference: referenceId,
-      total_amount: Number(amount).toFixed(2),
+      transaction_amount: Number(amount),
       description: description || `Venda ${referenceId}`,
+      payment_method_id: 'pix',
       payer: {
         email: payerEmail,
         first_name: isTest ? 'APRO' : (credentials.payerFirstName || 'Cliente'),
       },
-      transactions: {
-        payments: [
-          {
-            amount: Number(amount).toFixed(2),
-            payment_method: {
-              id: 'pix',
-              type: 'bank_transfer',
-            },
-          },
-        ],
-      },
+      external_reference: referenceId,
     }),
   });
 
@@ -149,17 +138,16 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
     throw error;
   }
 
-  const payment = data.transactions?.payments?.[0] || {};
-  const method = payment.payment_method || {};
+  const tx = data.point_of_interaction?.transaction_data || {};
   return {
     providerTransactionId: String(data.id),
-    providerPaymentId: payment.id ? String(payment.id) : null,
-    status: normalizePointStatus('mercado_pago', data.status, data.transactions?.payments || []),
-    qrCode: method.qr_code || '',
-    qrCodeBase64: method.qr_code_base64 || '',
-    ticketUrl: method.ticket_url || '',
+    providerPaymentId: String(data.id),
+    status: normalizeStatus('mercado_pago', data.status),
+    qrCode: tx.qr_code || '',
+    qrCodeBase64: tx.qr_code_base64 || '',
+    ticketUrl: tx.ticket_url || '',
     payload: data,
-    expiresAt: null,
+    expiresAt: data.date_of_expiration || null,
   };
 }
 
@@ -167,7 +155,7 @@ async function getMercadoPagoPixStatus({ transaction, credentials }) {
   const accessToken = getCredential(credentials, 'accessToken');
   if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
 
-  const response = await fetch(`https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}`, {
+  const response = await fetch(`https://api.mercadopago.com/v1/payments/${transaction.providerTransactionId}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const data = await response.json();
@@ -179,8 +167,8 @@ async function getMercadoPagoPixStatus({ transaction, credentials }) {
   }
 
   return {
-    status: normalizePointStatus('mercado_pago', data.status, data.transactions?.payments || []),
-    paidAt: ['processed', 'paid', 'approved'].includes(String(data.status || '').toLowerCase()) ? new Date().toISOString() : null,
+    status: normalizeStatus('mercado_pago', data.status),
+    paidAt: data.date_approved || null,
     payload: data,
   };
 }
