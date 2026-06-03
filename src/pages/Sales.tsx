@@ -27,6 +27,7 @@ export default function Sales() {
   const [selectedCardAccountId, setSelectedCardAccountId] = useState('');
   const [pixTransaction, setPixTransaction] = useState<PixTransaction | null>(null);
   const [pixWaiting, setPixWaiting] = useState(false);
+  const [pixCancelling, setPixCancelling] = useState(false);
   const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
   const [cardWaiting, setCardWaiting] = useState(false);
   const [checkoutProcessing, setCheckoutProcessing] = useState(false);
@@ -35,7 +36,7 @@ export default function Sales() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { products, addProduct } = useInventoryStore();
-  const { addSale, createPixPayment, checkPixPayment, createCardPayment, checkCardPayment } = useSalesStore();
+  const { addSale, createPixPayment, checkPixPayment, cancelPixPayment, createCardPayment, checkCardPayment } = useSalesStore();
 
   useEffect(() => {
     apiRequest<PixAccount[]>('/pix/accounts')
@@ -174,6 +175,32 @@ export default function Sales() {
     } finally {
       setCheckoutProcessing(false);
     }
+  };
+
+  const handleClosePixModal = async () => {
+    if (!pixTransaction) return;
+    if (pixTransaction.status === 'paid') {
+      setPixTransaction(null);
+      return;
+    }
+    if (!pixWaiting || pixTransaction.status !== 'pending') {
+      setPixWaiting(false);
+      setPixTransaction(null);
+      setCheckoutProcessing(false);
+      return;
+    }
+
+    const shouldCancel = window.confirm('Cancelar esta cobranca Pix? A venda nao sera registrada.');
+    if (!shouldCancel) return;
+
+    setPixCancelling(true);
+    const cancelled = await cancelPixPayment(pixTransaction.id);
+    setPixCancelling(false);
+    if (!cancelled) return;
+    setPixWaiting(false);
+    setCheckoutProcessing(false);
+    setPixTransaction(null);
+    barcodeRef.current?.focus();
   };
 
   useEffect(() => {
@@ -461,7 +488,7 @@ export default function Sales() {
         </div>
       </div>
 
-      <Modal isOpen={!!pixTransaction} onClose={() => !pixWaiting && setPixTransaction(null)} title="Pagamento Pix">
+      <Modal isOpen={!!pixTransaction} onClose={handleClosePixModal} title="Pagamento Pix">
         {pixTransaction && (
           <div className="pix-payment-modal">
             <div className="pix-payment-status">
@@ -471,6 +498,30 @@ export default function Sales() {
                 <span>{formatCurrency(pixTransaction.amount)}</span>
               </div>
             </div>
+
+            {pixTransaction.provider === 'mercado_pago' && (pixTransaction.providerTransactionId || pixTransaction.providerPaymentId || pixTransaction.externalReference) && (
+              <div className="pix-provider-identifiers">
+                <label>Identificacao Mercado Pago</label>
+                {pixTransaction.providerTransactionId && (
+                  <div>
+                    <span>Pedido</span>
+                    <strong>{pixTransaction.providerTransactionId}</strong>
+                  </div>
+                )}
+                {pixTransaction.providerPaymentId && (
+                  <div>
+                    <span>Pagamento</span>
+                    <strong>{pixTransaction.providerPaymentId}</strong>
+                  </div>
+                )}
+                {pixTransaction.externalReference && (
+                  <div>
+                    <span>Referencia</span>
+                    <strong>{pixTransaction.externalReference}</strong>
+                  </div>
+                )}
+              </div>
+            )}
 
             {pixTransaction.qrCodeBase64 ? (
               <img className="pix-qr-image" src={`data:image/png;base64,${pixTransaction.qrCodeBase64}`} alt="QR Code Pix" />
@@ -492,11 +543,19 @@ export default function Sales() {
             )}
 
             {pixTransaction.ticketUrl && (
-              <a className="pix-ticket-link" href={pixTransaction.ticketUrl} target="_blank" rel="noreferrer">Abrir pagina do Pix</a>
+              <div className="pix-test-payment">
+                <strong>Pagamento manual de teste</strong>
+                <span>Abra a pagina do Pix e pague usando a conta comprador de teste do Mercado Pago. Esta tela continuara consultando a confirmacao automaticamente.</span>
+                <a className="pix-ticket-link" href={pixTransaction.ticketUrl} target="_blank" rel="noreferrer">Abrir pagina do Pix</a>
+              </div>
             )}
 
             <div className="pix-waiting-note">
-              {pixWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A cobranca nao esta mais em consulta automatica.'}
+              {pixCancelling
+                ? 'Cancelando a cobranca Pix...'
+                : pixWaiting
+                  ? 'O sistema esta consultando a confirmacao automaticamente. Clique no X para cancelar esta cobranca.'
+                  : 'A cobranca nao esta mais em consulta automatica.'}
             </div>
           </div>
         )}

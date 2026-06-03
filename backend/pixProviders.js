@@ -81,6 +81,29 @@ const normalizePointStatus = (provider, status, payments = []) => {
   return 'pending';
 };
 
+const readJsonPayload = (value) => {
+  try { return JSON.parse(value || '{}'); } catch { return {}; }
+};
+
+const getProviderPaymentId = (payload) => payload?.transactions?.payments?.[0]?.id || payload?.id || null;
+
+async function fetchMercadoPagoJson(url, accessToken, fallbackMessage) {
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(stringifyProviderError(data, fallbackMessage));
+    error.providerPayload = data;
+    error.providerStatus = response.status;
+    throw error;
+  }
+  return data;
+}
+
 async function createFakePixCharge({ amount, referenceId }) {
   const payload = `00020126580014br.gov.bcb.pix0136fake-${referenceId}520400005303986540${Number(amount).toFixed(2)}5802BR5925FAKE PROVIDER TESTE6009SAO PAULO62070503***6304FAKE`;
   return {
@@ -91,6 +114,13 @@ async function createFakePixCharge({ amount, referenceId }) {
     ticketUrl: '',
     payload: { fakeAutoApproveAfterSeconds: 5 },
     expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+  };
+}
+
+async function cancelFakePixCharge() {
+  return {
+    status: 'cancelled',
+    payload: { cancelledAt: new Date().toISOString() },
   };
 }
 
@@ -121,11 +151,12 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
     body: JSON.stringify({
       type: 'online',
       external_reference: referenceId,
+      processing_mode: 'automatic',
       total_amount: Number(amount).toFixed(2),
       description: description || `Venda ${referenceId}`,
       payer: {
         email: payerEmail,
-        first_name: isTest ? 'APRO' : (credentials.payerFirstName || 'Cliente'),
+        first_name: isTest ? 'APRO' : (getCredential(credentials, 'payerFirstName') || 'Cliente'),
       },
       transactions: {
         payments: [
@@ -153,6 +184,8 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
   const method = payment.payment_method || {};
   return {
     providerTransactionId: String(data.id),
+    providerPaymentId: payment.id ? String(payment.id) : null,
+    externalReference: data.external_reference || referenceId,
     status: normalizePointStatus('mercado_pago', data.status, data.transactions?.payments || []),
     qrCode: method.qr_code || '',
     qrCodeBase64: method.qr_code_base64 || '',
@@ -166,20 +199,46 @@ async function getMercadoPagoPixStatus({ transaction, credentials }) {
   const accessToken = getCredential(credentials, 'accessToken');
   if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
 
-  const response = await fetch(`https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const error = new Error(stringifyProviderError(data, 'Erro ao consultar Pix no Mercado Pago.'));
-    error.providerPayload = data;
-    error.providerStatus = response.status;
-    throw error;
+  const storedPayload = readJsonPayload(transaction.payload);
+  const providerPayload = storedPayload.latestProviderPayload || storedPayload.providerPayload || {};
+  const storedPaymentId = storedPayload.providerPaymentId || getProviderPaymentId(providerPayload);
+  const externalReference = storedPayload.externalReference || providerPayload.external_reference || null;
+
+  let data;
+  try {
+    data = await fetchMercadoPagoJson(
+      `https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}`,
+      accessToken,
+      'Erro ao consultar Pix no Mercado Pago.'
+    );
+  } catch (orderError) {
+    if (!storedPaymentId && !externalReference) throw orderError;
+    if (storedPaymentId) {
+      data = await fetchMercadoPagoJson(
+        `https://api.mercadopago.com/v1/payments/${storedPaymentId}`,
+        accessToken,
+        'Erro ao consultar pagamento Pix no Mercado Pago.'
+      );
+    } else {
+      const search = await fetchMercadoPagoJson(
+        `https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(externalReference)}`,
+        accessToken,
+        'Erro ao buscar pagamento Pix no Mercado Pago.'
+      );
+      data = search.results?.[0] || search;
+    }
   }
 
+  const payments = data.transactions?.payments || (data.id ? [data] : []);
+  const providerPaymentId = getProviderPaymentId(data) || storedPaymentId;
+  const status = data.transactions ? normalizePointStatus('mercado_pago', data.status, payments) : normalizeStatus('mercado_pago', data.status);
+  const paidAt = status === 'paid' ? (data.date_approved || new Date().toISOString()) : null;
+
   return {
-    status: normalizePointStatus('mercado_pago', data.status, data.transactions?.payments || []),
-    paidAt: ['processed', 'paid', 'approved'].includes(String(data.status || '').toLowerCase()) ? new Date().toISOString() : null,
+    status,
+    paidAt,
+    providerPaymentId,
+    externalReference: data.external_reference || externalReference,
     payload: data,
   };
 }
@@ -282,15 +341,54 @@ async function getMercadoPagoPointStatus({ transaction, credentials }) {
   };
 }
 
+async function cancelMercadoPagoPixCharge({ transaction, credentials }) {
+  const accessToken = getCredential(credentials, 'accessToken');
+  if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
+
+  const storedPayload = readJsonPayload(transaction.payload);
+  const providerPayload = storedPayload.latestProviderPayload || storedPayload.providerPayload || {};
+  const paymentId = storedPayload.providerPaymentId || getProviderPaymentId(providerPayload);
+
+  if (!transaction.providerTransactionId) {
+    return {
+      status: 'cancelled',
+      payload: { localOnly: true, reason: 'Order Mercado Pago ainda sem id para cancelamento remoto.' },
+    };
+  }
+
+  const response = await fetch(`https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}/cancel`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(stringifyProviderError(data, 'Erro ao cancelar order Pix no Mercado Pago.'));
+    error.providerPayload = data;
+    error.providerStatus = response.status;
+    throw error;
+  }
+
+  const payments = data.transactions?.payments || [];
+  return {
+    status: normalizePointStatus('mercado_pago', data.status, payments),
+    providerPaymentId: getProviderPaymentId(data) || paymentId,
+    externalReference: data.external_reference || storedPayload.externalReference || providerPayload.external_reference || null,
+    payload: data,
+  };
+}
+
 function getPixProvider(provider) {
   if (provider === 'fake') {
-    return { createCharge: createFakePixCharge, getStatus: getFakePixStatus };
+    return { createCharge: createFakePixCharge, getStatus: getFakePixStatus, cancelCharge: cancelFakePixCharge };
   }
   if (provider === 'mercado_pago') {
-    return { createCharge: createMercadoPagoPixCharge, getStatus: getMercadoPagoPixStatus };
+    return { createCharge: createMercadoPagoPixCharge, getStatus: getMercadoPagoPixStatus, cancelCharge: cancelMercadoPagoPixCharge };
   }
   if (provider === 'mercado_pago_fake') {
-    return { createCharge: createFakePixCharge, getStatus: getFakePixStatus };
+    return { createCharge: createFakePixCharge, getStatus: getFakePixStatus, cancelCharge: cancelFakePixCharge };
   }
   throw new Error('Provider Pix ainda nao implementado.');
 }

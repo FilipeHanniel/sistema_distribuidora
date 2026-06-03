@@ -91,6 +91,10 @@ export interface PixTransaction {
   fiscalDocument?: FiscalDocument | null;
   paidAt?: string;
   amount: number;
+  provider?: string;
+  providerTransactionId?: string;
+  providerPaymentId?: string | null;
+  externalReference?: string | null;
   qrCode?: string;
   qrCodeBase64?: string;
   ticketUrl?: string;

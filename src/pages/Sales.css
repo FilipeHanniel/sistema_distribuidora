@@ -609,6 +609,42 @@
   font-weight: 700;
 }
 
+.pix-provider-identifiers {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-main);
+}
+
+.pix-provider-identifiers label {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pix-provider-identifiers div {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pix-provider-identifiers span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pix-provider-identifiers strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
 .pix-qr-image {
   width: min(260px, 100%);
   aspect-ratio: 1;
@@ -660,6 +696,27 @@
 .pix-ticket-link {
   color: var(--primary);
   font-weight: 700;
+}
+
+.pix-test-payment {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-main);
+}
+
+.pix-test-payment strong {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.pix-test-payment span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .pix-waiting-note {

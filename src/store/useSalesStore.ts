@@ -23,6 +23,7 @@ interface SalesState {
   addSale: (items: SaleItem[], totalAmount: number, paymentMethod: string) => Promise<string | undefined>;
   createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string) => Promise<PixTransaction | undefined>;
   checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
+  cancelPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   createCardPayment: (items: SaleItem[], totalAmount: number, accountId?: string) => Promise<CardTransaction | undefined>;
   checkCardPayment: (transactionId: string) => Promise<CardTransaction | undefined>;
   getSalesByDateRange: (startDate: Date, endDate: Date) => Sale[];
@@ -102,6 +103,24 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       return transaction;
     } catch (err) {
       console.error('Falha ao consultar Pix:', err);
+      return undefined;
+    }
+  },
+
+  cancelPixPayment: async (transactionId) => {
+    try {
+      const transaction = await apiRequest<PixTransaction>(`/payments/pix/${transactionId}/cancel`, {
+        method: 'POST',
+      });
+      set(state => {
+        const next = { ...state.pendingPixItems };
+        delete next[transactionId];
+        return { pendingPixItems: next };
+      });
+      return transaction;
+    } catch (err) {
+      console.error('Falha ao cancelar Pix:', err);
+      alert(getApiErrorMessage(err, 'Erro ao cancelar Pix'));
       return undefined;
     }
   },

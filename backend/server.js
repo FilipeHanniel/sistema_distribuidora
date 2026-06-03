@@ -1406,7 +1406,12 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       charge.qrCode || '',
       charge.qrCodeBase64 || '',
       charge.ticketUrl || '',
-      JSON.stringify({ items, providerPayload: charge.payload || null }),
+      JSON.stringify({
+        items,
+        providerPaymentId: charge.providerPaymentId || null,
+        externalReference: charge.externalReference || referenceId,
+        providerPayload: charge.payload || null,
+      }),
       charge.expiresAt || null,
       createdAt,
       createdAt
@@ -1416,6 +1421,10 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       id: transactionId,
       status: charge.status,
       amount: totalAmount,
+      provider: account.provider,
+      providerTransactionId: charge.providerTransactionId,
+      providerPaymentId: charge.providerPaymentId || null,
+      externalReference: charge.externalReference || referenceId,
       qrCode: charge.qrCode || '',
       qrCodeBase64: charge.qrCodeBase64 || '',
       ticketUrl: charge.ticketUrl || '',
@@ -1572,9 +1581,12 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       status = statusResult.status;
       paidAt = statusResult.paidAt || paidAt;
 
+      const currentPayload = JSON.parse(transaction.payload || '{}');
       db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
         .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
-          ...JSON.parse(transaction.payload || '{}'),
+          ...currentPayload,
+          providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
+          externalReference: statusResult.externalReference || currentPayload.externalReference || null,
           latestProviderPayload: statusResult.payload || null,
         }), transaction.id);
     }
@@ -1594,6 +1606,11 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(saleId, estId) || null
       : null;
 
+    const latestTransaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id) || transaction;
+    const responsePayload = JSON.parse(latestTransaction.payload || '{}');
+    const responseProviderPayload = responsePayload.latestProviderPayload || responsePayload.providerPayload || {};
+    const responsePayment = responseProviderPayload.transactions?.payments?.[0] || {};
+
     res.json({
       id: transaction.id,
       status,
@@ -1603,6 +1620,8 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       amount: transaction.amount,
       provider: transaction.provider,
       providerTransactionId: transaction.providerTransactionId,
+      providerPaymentId: responsePayload.providerPaymentId || responsePayment.id || null,
+      externalReference: responsePayload.externalReference || responseProviderPayload.external_reference || null,
       paymentConfirmation: saleId ? getPaymentTransactionForSale(saleId, estId) : null,
       qrCode: transaction.qrCode,
       qrCodeBase64: transaction.qrCodeBase64,
@@ -1618,6 +1637,74 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
 // ==============================
 // SUPER ADMIN — ESTABELECIMENTOS
 // ==============================
+// PAGAMENTOS PIX
+app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
+      .get(req.params.id, estId, 'pix');
+    if (!transaction) return res.status(404).json({ error: 'Transacao Pix nao encontrada.' });
+    if (transaction.status === 'paid') return res.status(409).json({ error: 'Nao e possivel cancelar um Pix ja pago.' });
+
+    if (transaction.status !== 'pending') {
+      return res.json({
+        id: transaction.id,
+        status: transaction.status,
+        saleId: transaction.saleId,
+        paidAt: transaction.paidAt,
+        amount: transaction.amount,
+        provider: transaction.provider,
+        providerTransactionId: transaction.providerTransactionId,
+        qrCode: transaction.qrCode,
+        qrCodeBase64: transaction.qrCodeBase64,
+        ticketUrl: transaction.ticketUrl,
+        expiresAt: transaction.expiresAt,
+      });
+    }
+
+    const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
+    if (!account) return res.status(404).json({ error: 'Conta Pix da transacao nao encontrada.' });
+
+    const provider = getPixProvider(account.provider);
+    const cancelResult = provider.cancelCharge
+      ? await provider.cancelCharge({ transaction, credentials: decodeCredentials(account.credentials) })
+      : { status: 'cancelled', payload: { localOnly: true } };
+
+    const currentPayload = JSON.parse(transaction.payload || '{}');
+    const nextPayload = {
+      ...currentPayload,
+      providerPaymentId: cancelResult.providerPaymentId || currentPayload.providerPaymentId || null,
+      externalReference: cancelResult.externalReference || currentPayload.externalReference || null,
+      latestCancelProviderPayload: cancelResult.payload || null,
+    };
+    const status = cancelResult.status === 'paid' ? 'paid' : 'cancelled';
+    const updatedAt = new Date().toISOString();
+    db.prepare('UPDATE payment_transactions SET status = ?, updatedAt = ?, payload = ? WHERE id = ?')
+      .run(status, updatedAt, JSON.stringify(nextPayload), transaction.id);
+
+    res.json({
+      id: transaction.id,
+      status,
+      saleId: transaction.saleId,
+      paidAt: transaction.paidAt,
+      amount: transaction.amount,
+      provider: transaction.provider,
+      providerTransactionId: transaction.providerTransactionId,
+      providerPaymentId: nextPayload.providerPaymentId || null,
+      externalReference: nextPayload.externalReference || null,
+      paymentConfirmation: null,
+      qrCode: transaction.qrCode,
+      qrCodeBase64: transaction.qrCodeBase64,
+      ticketUrl: transaction.ticketUrl,
+      expiresAt: transaction.expiresAt,
+    });
+  } catch (err) {
+    console.error('[Pix Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SUPER ADMIN - ESTABELECIMENTOS
 app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
   try {
     const requestedPeriod = Number(req.query.periodDays || req.query.period || 30);
