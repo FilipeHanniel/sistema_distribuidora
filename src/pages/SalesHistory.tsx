@@ -37,6 +37,13 @@ const providerLabel = (provider?: string) => {
   return provider || 'Nao informado';
 };
 
+const confirmationSourceLabel = (source?: string) => {
+  if (source === 'webhook') return 'Webhook';
+  if (source === 'polling' || source === 'provider') return 'Consulta automatica';
+  if (source === 'simulated') return 'Simulado';
+  return 'Nao informado';
+};
+
 export default function SalesHistory() {
   const { sales, fetchSales } = useSalesStore();
   const { isOperador } = useAuthStore();
@@ -287,11 +294,11 @@ export default function SalesHistory() {
                       <div className="payment-confirmation-box">
                         <div>
                           <span>Confirmacao do pagamento</span>
-                          <strong>
-                            {sale.paymentTransaction.confirmationSource === 'provider'
-                              ? 'Confirmado pelo provedor'
-                              : 'Confirmacao simulada'}
-                          </strong>
+                          <strong>Confirmado pelo provedor</strong>
+                        </div>
+                        <div>
+                          <span>Canal</span>
+                          <strong>{confirmationSourceLabel(sale.paymentTransaction.confirmationSource)}</strong>
                         </div>
                         <div>
                           <span>Provider</span>

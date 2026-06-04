@@ -39,6 +39,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-2024';
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET || '';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -220,6 +221,7 @@ const sanitizePaymentTransaction = (transaction) => {
   try { payload = JSON.parse(transaction.payload || '{}'); } catch {}
   const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
   const payment = providerPayload.transactions?.payments?.[0] || {};
+  const source = payload.confirmationSource || (['fake', 'mercado_pago_fake'].includes(transaction.provider) ? 'simulated' : 'polling');
   return {
     id: transaction.id,
     provider: transaction.provider,
@@ -233,7 +235,7 @@ const sanitizePaymentTransaction = (transaction) => {
     environment: providerPayload.api_response?.status ? 'mercado_pago' : undefined,
     providerStatus: providerPayload.status || payment.status || null,
     providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
-    confirmationSource: ['fake', 'mercado_pago_fake'].includes(transaction.provider) ? 'simulated' : 'provider',
+    confirmationSource: source,
   };
 };
 
@@ -246,6 +248,129 @@ const getPaymentTransactionForSale = (saleId, estId) => {
     LIMIT 1
   `).get(saleId, estId);
   return sanitizePaymentTransaction(transaction);
+};
+
+const parseTransactionPayload = (transaction) => {
+  try { return JSON.parse(transaction?.payload || '{}'); } catch { return {}; }
+};
+
+const paymentMatchesProviderId = (transaction, providerId) => {
+  if (!providerId) return false;
+  const id = String(providerId);
+  const payload = parseTransactionPayload(transaction);
+  const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
+  const payment = providerPayload.transactions?.payments?.[0] || {};
+  const ticketUrl = payment.payment_method?.ticket_url || transaction.ticketUrl || '';
+  return [
+    transaction.providerTransactionId,
+    payload.providerPaymentId,
+    payload.externalReference,
+    providerPayload.id,
+    providerPayload.external_reference,
+    payment.id,
+    payment.reference_id,
+  ].filter(Boolean).map(String).includes(id) || ticketUrl.includes(`/payments/${id}/`);
+};
+
+const findPaymentTransactionByProviderId = (providerId) => {
+  const direct = db.prepare(`
+    SELECT *
+    FROM payment_transactions
+    WHERE provider = 'mercado_pago'
+      AND paymentMethod = 'pix'
+      AND providerTransactionId = ?
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `).get(String(providerId || ''));
+  if (direct) return direct;
+
+  const candidates = db.prepare(`
+    SELECT *
+    FROM payment_transactions
+    WHERE provider = 'mercado_pago'
+      AND paymentMethod = 'pix'
+      AND status IN ('pending', 'paid')
+    ORDER BY createdAt DESC
+    LIMIT 100
+  `).all();
+  return candidates.find(transaction => paymentMatchesProviderId(transaction, providerId)) || null;
+};
+
+const updatePaymentTransactionFromProvider = async ({ transaction, source, userId = null }) => {
+  const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, transaction.establishmentId);
+  if (!account) throw new Error('Conta Pix da transacao nao encontrada.');
+
+  const statusResult = await getPixProvider(account.provider).getStatus({
+    transaction,
+    credentials: decodeCredentials(account.credentials),
+  });
+  const currentPayload = parseTransactionPayload(transaction);
+  const nextPayload = {
+    ...currentPayload,
+    providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
+    externalReference: statusResult.externalReference || currentPayload.externalReference || null,
+    latestProviderPayload: statusResult.payload || null,
+    confirmationSource: statusResult.status === 'paid' ? source : currentPayload.confirmationSource,
+  };
+  const status = statusResult.status;
+  const paidAt = statusResult.paidAt || transaction.paidAt || null;
+  db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
+    .run(status, paidAt, new Date().toISOString(), JSON.stringify(nextPayload), transaction.id);
+
+  let saleId = transaction.saleId;
+  let fiscalDocument = null;
+  if (status === 'paid' && !saleId) {
+    const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+    const stored = parseTransactionPayload(fresh);
+    const storedItems = stored.items || [];
+    validateSaleItemsForTenant(storedItems, fresh.establishmentId);
+    const operator = userId || db.prepare(`
+      SELECT id FROM users
+      WHERE establishmentId = ? AND role IN ('gestor', 'operador') AND active = 1 AND isDeleted = 0
+      ORDER BY role = 'gestor' DESC, createdAt ASC
+      LIMIT 1
+    `).get(fresh.establishmentId)?.id || null;
+    const saleResult = await createPaidSale(storedItems, fresh.amount, 'pix', operator, fresh.establishmentId);
+    saleId = saleResult.saleId;
+    fiscalDocument = saleResult.fiscalDocument || null;
+    db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
+      .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+  } else if (saleId) {
+    fiscalDocument = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(saleId, transaction.establishmentId) || null;
+  }
+
+  return {
+    transaction: db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id),
+    status,
+    paidAt,
+    saleId,
+    fiscalDocument,
+    payload: nextPayload,
+  };
+};
+
+const validateMercadoPagoWebhookSignature = (req) => {
+  if (!MERCADO_PAGO_WEBHOOK_SECRET) return true;
+  const signatureHeader = req.headers['x-signature'];
+  const requestId = req.headers['x-request-id'];
+  const providerId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
+  if (!signatureHeader || !requestId || !providerId) return false;
+
+  const parts = String(signatureHeader).split(',').reduce((acc, part) => {
+    const [key, value] = part.split('=').map(v => v.trim());
+    if (key && value) acc[key] = value;
+    return acc;
+  }, {});
+  if (!parts.ts || !parts.v1) return false;
+
+  const manifest = `id:${providerId};request-id:${requestId};ts:${parts.ts};`;
+  const expected = crypto
+    .createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET)
+    .update(manifest)
+    .digest('hex');
+  if (expected.length !== parts.v1.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
 };
 
 const sanitizeFiscalSettings = (settings) => {
@@ -1587,6 +1712,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
           ...currentPayload,
           providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
           externalReference: statusResult.externalReference || currentPayload.externalReference || null,
+          confirmationSource: statusResult.status === 'paid' ? 'polling' : currentPayload.confirmationSource,
           latestProviderPayload: statusResult.payload || null,
         }), transaction.id);
     }
@@ -1701,6 +1827,46 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
   } catch (err) {
     console.error('[Pix Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/webhooks/mercado-pago', async (req, res) => {
+  try {
+    if (!validateMercadoPagoWebhookSignature(req)) {
+      return res.status(401).json({ received: false, error: 'Assinatura invalida.' });
+    }
+
+    const providerId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
+    const eventType = req.body?.type || req.body?.topic || req.body?.action || 'unknown';
+    if (!providerId) {
+      return res.status(200).json({ received: true, processed: false, reason: 'Evento sem identificador.' });
+    }
+
+    const transaction = findPaymentTransactionByProviderId(providerId);
+    if (!transaction) {
+      console.warn('[Mercado Pago Webhook] Transacao nao encontrada para id:', providerId, 'evento:', eventType);
+      return res.status(200).json({ received: true, processed: false, reason: 'Transacao nao encontrada.' });
+    }
+
+    if (transaction.status === 'paid' && transaction.saleId) {
+      return res.status(200).json({ received: true, processed: true, status: 'already_paid', transactionId: transaction.id });
+    }
+
+    const result = await updatePaymentTransactionFromProvider({
+      transaction,
+      source: 'webhook',
+    });
+
+    res.status(200).json({
+      received: true,
+      processed: true,
+      transactionId: transaction.id,
+      status: result.status,
+      saleId: result.saleId || null,
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Webhook Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(500).json({ received: false, error: err.message });
   }
 });
 
