@@ -205,6 +205,22 @@ const sanitizePixAccount = (account) => {
     pixKey: account.pixKey,
     supportsPix: credentials.supportsPix !== false,
     supportsPoint: Boolean(credentials.supportsPoint),
+    mpEnvironment: credentials.mpEnvironment || 'test',
+    payerEmail: credentials.payerEmail || '',
+    statementDescriptor: credentials.statementDescriptor || '',
+    payerFirstName: credentials.payerFirstName || '',
+    payerLastName: credentials.payerLastName || '',
+    payerIdentificationType: credentials.payerIdentificationType || '',
+    payerIdentificationNumber: credentials.payerIdentificationNumber || '',
+    payerPhoneAreaCode: credentials.payerPhoneAreaCode || '',
+    payerPhoneNumber: credentials.payerPhoneNumber || '',
+    payerZipCode: credentials.payerZipCode || '',
+    payerStreetName: credentials.payerStreetName || '',
+    payerStreetNumber: credentials.payerStreetNumber || '',
+    payerCity: credentials.payerCity || '',
+    payerState: credentials.payerState || '',
+    payerNeighborhood: credentials.payerNeighborhood || '',
+    payerComplement: credentials.payerComplement || '',
     terminalId: credentials.terminalId || '',
     storeId: credentials.storeId || '',
     posId: credentials.posId || '',
@@ -1488,7 +1504,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
 
 app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) => {
   try {
-    const { items, totalAmount, pixAccountId } = req.body;
+    const { items, totalAmount, pixAccountId, deviceId } = req.body;
     const estId = req.user.establishmentId;
     validateSaleItemsForTenant(items, estId);
 
@@ -1512,6 +1528,8 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       referenceId,
       credentials: accountCredentials,
       description: `Venda PDV ${transactionId}`,
+      items,
+      deviceId,
     });
     const createdAt = new Date().toISOString();
 
@@ -1838,6 +1856,15 @@ app.post('/api/webhooks/mercado-pago', async (req, res) => {
 
     const providerId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
     const eventType = req.body?.type || req.body?.topic || req.body?.action || 'unknown';
+    if (String(eventType).includes('mp-connect') || String(req.body?.topic || '').includes('mp-connect')) {
+      console.log('[Mercado Pago Webhook] Evento OAuth/mp-connect recebido:', JSON.stringify(req.body));
+      return res.status(200).json({
+        received: true,
+        processed: true,
+        event: 'mp-connect',
+      });
+    }
+
     if (!providerId) {
       return res.status(200).json({ received: true, processed: false, reason: 'Evento sem identificador.' });
     }

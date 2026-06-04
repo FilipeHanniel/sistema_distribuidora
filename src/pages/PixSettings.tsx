@@ -25,6 +25,20 @@ const emptyForm = {
   accessToken: '',
   mpEnvironment: 'test',
   payerEmail: '',
+  statementDescriptor: 'DISTRIBUIDORA',
+  payerFirstName: '',
+  payerLastName: '',
+  payerIdentificationType: 'CPF',
+  payerIdentificationNumber: '',
+  payerPhoneAreaCode: '',
+  payerPhoneNumber: '',
+  payerZipCode: '',
+  payerStreetName: '',
+  payerStreetNumber: '',
+  payerCity: '',
+  payerState: '',
+  payerNeighborhood: '',
+  payerComplement: '',
   supportsPix: true,
   supportsPoint: false,
   terminalId: '',
@@ -74,6 +88,20 @@ export default function PixSettings() {
         ...capabilities,
         mpEnvironment: form.mpEnvironment,
         payerEmail: form.payerEmail.trim(),
+        statementDescriptor: form.statementDescriptor.trim(),
+        payerFirstName: form.payerFirstName.trim(),
+        payerLastName: form.payerLastName.trim(),
+        payerIdentificationType: form.payerIdentificationType.trim(),
+        payerIdentificationNumber: form.payerIdentificationNumber.trim(),
+        payerPhoneAreaCode: form.payerPhoneAreaCode.trim(),
+        payerPhoneNumber: form.payerPhoneNumber.trim(),
+        payerZipCode: form.payerZipCode.trim(),
+        payerStreetName: form.payerStreetName.trim(),
+        payerStreetNumber: form.payerStreetNumber.trim(),
+        payerCity: form.payerCity.trim(),
+        payerState: form.payerState.trim(),
+        payerNeighborhood: form.payerNeighborhood.trim(),
+        payerComplement: form.payerComplement.trim(),
         terminalId: form.terminalId.trim(),
         storeId: form.storeId.trim(),
         posId: form.posId.trim(),
@@ -100,6 +128,22 @@ export default function PixSettings() {
       name: account.name,
       provider: account.provider,
       pixKey: account.pixKey || '',
+      mpEnvironment: account.mpEnvironment || 'test',
+      payerEmail: account.payerEmail || '',
+      statementDescriptor: account.statementDescriptor || 'DISTRIBUIDORA',
+      payerFirstName: account.payerFirstName || '',
+      payerLastName: account.payerLastName || '',
+      payerIdentificationType: account.payerIdentificationType || 'CPF',
+      payerIdentificationNumber: account.payerIdentificationNumber || '',
+      payerPhoneAreaCode: account.payerPhoneAreaCode || '',
+      payerPhoneNumber: account.payerPhoneNumber || '',
+      payerZipCode: account.payerZipCode || '',
+      payerStreetName: account.payerStreetName || '',
+      payerStreetNumber: account.payerStreetNumber || '',
+      payerCity: account.payerCity || '',
+      payerState: account.payerState || '',
+      payerNeighborhood: account.payerNeighborhood || '',
+      payerComplement: account.payerComplement || '',
       supportsPix: account.supportsPix !== false,
       supportsPoint: Boolean(account.supportsPoint),
       terminalId: account.terminalId || '',
@@ -282,6 +326,80 @@ export default function PixSettings() {
               </div>
               <div className="pix-provider-note">
                 Em teste, o Mercado Pago exige e-mail com @testuser.com. Se deixar vazio, o sistema usa test@testuser.com automaticamente.
+              </div>
+              <div className="form-group">
+                <label>Nome para extrato / descritor</label>
+                <input className="form-control" maxLength={22} value={form.statementDescriptor} onChange={e => setForm(p => ({ ...p, statementDescriptor: e.target.value }))} placeholder="Ex: DISTRIBUIDORA" />
+              </div>
+              <div className="pix-provider-note">
+                Dados opcionais para melhorar aprovacoes no Mercado Pago. Em Pix de teste, o nome APRO continua sendo usado automaticamente para simular pagamento aprovado.
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Nome do comprador</label>
+                  <input className="form-control" value={form.payerFirstName} onChange={e => setForm(p => ({ ...p, payerFirstName: e.target.value }))} placeholder="Cliente" />
+                </div>
+                <div className="form-group">
+                  <label>Sobrenome do comprador</label>
+                  <input className="form-control" value={form.payerLastName} onChange={e => setForm(p => ({ ...p, payerLastName: e.target.value }))} placeholder="PDV" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Tipo de documento</label>
+                  <select className="form-control" value={form.payerIdentificationType} onChange={e => setForm(p => ({ ...p, payerIdentificationType: e.target.value }))}>
+                    <option value="CPF">CPF</option>
+                    <option value="CNPJ">CNPJ</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Numero do documento</label>
+                  <input className="form-control" value={form.payerIdentificationNumber} onChange={e => setForm(p => ({ ...p, payerIdentificationNumber: e.target.value }))} placeholder="Somente numeros" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>DDD</label>
+                  <input className="form-control" value={form.payerPhoneAreaCode} onChange={e => setForm(p => ({ ...p, payerPhoneAreaCode: e.target.value }))} placeholder="62" />
+                </div>
+                <div className="form-group">
+                  <label>Telefone</label>
+                  <input className="form-control" value={form.payerPhoneNumber} onChange={e => setForm(p => ({ ...p, payerPhoneNumber: e.target.value }))} placeholder="999999999" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>CEP</label>
+                  <input className="form-control" value={form.payerZipCode} onChange={e => setForm(p => ({ ...p, payerZipCode: e.target.value }))} placeholder="74000000" />
+                </div>
+                <div className="form-group">
+                  <label>Cidade</label>
+                  <input className="form-control" value={form.payerCity} onChange={e => setForm(p => ({ ...p, payerCity: e.target.value }))} placeholder="Goiania" />
+                </div>
+                <div className="form-group">
+                  <label>Estado</label>
+                  <input className="form-control" maxLength={2} value={form.payerState} onChange={e => setForm(p => ({ ...p, payerState: e.target.value.toUpperCase() }))} placeholder="GO" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Rua</label>
+                  <input className="form-control" value={form.payerStreetName} onChange={e => setForm(p => ({ ...p, payerStreetName: e.target.value }))} placeholder="Av. Principal" />
+                </div>
+                <div className="form-group">
+                  <label>Numero</label>
+                  <input className="form-control" value={form.payerStreetNumber} onChange={e => setForm(p => ({ ...p, payerStreetNumber: e.target.value }))} placeholder="100" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Bairro</label>
+                  <input className="form-control" value={form.payerNeighborhood} onChange={e => setForm(p => ({ ...p, payerNeighborhood: e.target.value }))} placeholder="Centro" />
+                </div>
+                <div className="form-group">
+                  <label>Complemento</label>
+                  <input className="form-control" value={form.payerComplement} onChange={e => setForm(p => ({ ...p, payerComplement: e.target.value }))} placeholder="Opcional" />
+                </div>
               </div>
               {form.supportsPoint && (
                 <>

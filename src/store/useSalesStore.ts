@@ -21,7 +21,7 @@ interface SalesState {
   pendingPixItems: Record<string, SaleItem[]>;
   fetchSales: () => Promise<void>;
   addSale: (items: SaleItem[], totalAmount: number, paymentMethod: string) => Promise<string | undefined>;
-  createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string) => Promise<PixTransaction | undefined>;
+  createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string, deviceId?: string) => Promise<PixTransaction | undefined>;
   checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   cancelPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   createCardPayment: (items: SaleItem[], totalAmount: number, accountId?: string) => Promise<CardTransaction | undefined>;
@@ -71,11 +71,11 @@ export const useSalesStore = create<SalesState>((set, get) => ({
     }
   },
 
-  createPixPayment: async (items, totalAmount, pixAccountId) => {
+  createPixPayment: async (items, totalAmount, pixAccountId, deviceId) => {
     try {
       const transaction = await apiRequest<PixTransaction>('/payments/pix', {
         method: 'POST',
-        body: { items, totalAmount, pixAccountId },
+        body: { items, totalAmount, pixAccountId, deviceId },
       });
       set(state => ({ pendingPixItems: { ...state.pendingPixItems, [transaction.id]: items } }));
       return transaction;

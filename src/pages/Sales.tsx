@@ -39,6 +39,17 @@ export default function Sales() {
   const { addSale, createPixPayment, checkPixPayment, cancelPixPayment, createCardPayment, checkCardPayment } = useSalesStore();
 
   useEffect(() => {
+    const mpWindow = window as unknown as {
+      MercadoPago?: new (publicKey: string, options?: { locale?: string }) => unknown;
+      mercadoPagoSdk?: unknown;
+    };
+    const publicKey = import.meta.env.VITE_MERCADO_PAGO_PUBLIC_KEY || '';
+    if (publicKey && mpWindow.MercadoPago && !mpWindow.mercadoPagoSdk) {
+      mpWindow.mercadoPagoSdk = new mpWindow.MercadoPago(publicKey, { locale: 'pt-BR' });
+    }
+  }, []);
+
+  useEffect(() => {
     apiRequest<PixAccount[]>('/pix/accounts')
       .then(accounts => {
         const active = accounts.filter(a => a.active);
@@ -145,12 +156,17 @@ export default function Sales() {
     setCart(current => current.filter(item => item.productId !== productId));
   };
 
+  const getMercadoPagoDeviceId = () => {
+    const mpWindow = window as unknown as { MP_DEVICE_SESSION_ID?: string; mpDeviceSessionId?: string };
+    return mpWindow.mpDeviceSessionId || mpWindow.MP_DEVICE_SESSION_ID || '';
+  };
+
   const handleCheckout = async () => {
     if (cart.length === 0 || checkoutProcessing || pixWaiting || cardWaiting) return;
     setCheckoutProcessing(true);
     try {
       if (paymentMethod === 'pix') {
-        const transaction = await createPixPayment(cart, cartTotal, selectedPixAccountId || undefined);
+        const transaction = await createPixPayment(cart, cartTotal, selectedPixAccountId || undefined, getMercadoPagoDeviceId());
         if (transaction) {
           setPixTransaction(transaction);
           setPixWaiting(true);

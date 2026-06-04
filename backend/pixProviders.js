@@ -60,13 +60,13 @@ const stringifyProviderError = (data, fallback) => {
   if (Array.isArray(data.errors)) {
     for (const err of data.errors) {
       if (typeof err === 'string') parts.push(err);
-      else parts.push([err.code, err.message, err.description].filter(Boolean).join(': '));
+      else parts.push([err.code, err.message, err.description, err.details ? JSON.stringify(err.details) : null].filter(Boolean).join(': '));
     }
   }
   if (Array.isArray(data.details)) {
     for (const detail of data.details) {
       if (typeof detail === 'string') parts.push(detail);
-      else parts.push([detail.code, detail.message, detail.description].filter(Boolean).join(': '));
+      else parts.push([detail.code, detail.message, detail.description, detail.details ? JSON.stringify(detail.details) : null].filter(Boolean).join(': '));
     }
   }
   return parts.filter(Boolean).join(' | ') || fallback;
@@ -86,6 +86,55 @@ const readJsonPayload = (value) => {
 };
 
 const getProviderPaymentId = (payload) => payload?.transactions?.payments?.[0]?.id || payload?.id || null;
+
+const compactObject = (value) => {
+  if (Array.isArray(value)) {
+    const items = value.map(compactObject).filter(item => item !== undefined);
+    return items.length > 0 ? items : undefined;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, compactObject(item)])
+      .filter(([, item]) => item !== undefined && item !== null && item !== '');
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+  return value;
+};
+
+const onlyDigits = (value) => String(value || '').replace(/\D/g, '');
+
+const sanitizeText = (value, fallback, maxLength = 120) => {
+  const text = String(value || fallback || '').trim();
+  return text.slice(0, maxLength);
+};
+
+const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const buildMercadoPagoItems = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  return items.map((item, index) => {
+    const quantity = Math.max(1, Number.parseInt(String(item.quantity || 1), 10));
+    const unitPrice = Number(item.unitPrice || item.sellPrice || item.totalPrice / quantity || 0);
+    return compactObject({
+      external_code: sanitizeText(item.productId || item.id || String(index + 1), String(index + 1), 30),
+      title: sanitizeText(item.name, `Produto ${index + 1}`, 120),
+      description: sanitizeText(item.name, `Produto ${index + 1}`, 255),
+      category_id: sanitizeText(item.category || 'retail', 'retail', 40),
+      quantity,
+      unit_price: formatAmount(unitPrice),
+    });
+  });
+};
+
+const buildMercadoPagoAddress = (credentials) => compactObject({
+  zip_code: onlyDigits(credentials.payerZipCode),
+  street_name: getCredential(credentials, 'payerStreetName'),
+  street_number: getCredential(credentials, 'payerStreetNumber'),
+  city: getCredential(credentials, 'payerCity'),
+  state: getCredential(credentials, 'payerState'),
+  neighborhood: getCredential(credentials, 'payerNeighborhood'),
+  complement: getCredential(credentials, 'payerComplement'),
+});
 
 async function fetchMercadoPagoJson(url, accessToken, fallbackMessage) {
   const response = await fetch(url, {
@@ -132,7 +181,7 @@ async function getFakePixStatus({ transaction }) {
   };
 }
 
-async function createMercadoPagoPixCharge({ amount, referenceId, credentials, description }) {
+async function createMercadoPagoPixCharge({ amount, referenceId, credentials, description, items = [], deviceId = '' }) {
   const accessToken = getCredential(credentials, 'accessToken');
   if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
   const isTest = credentials.mpEnvironment !== 'production';
@@ -140,36 +189,63 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
   const payerEmail = isTest
     ? (configuredEmail.includes('@testuser.com') ? configuredEmail : 'test@testuser.com')
     : (configuredEmail || 'cliente@example.com');
+  const statementDescriptor = sanitizeText(credentials.statementDescriptor || credentials.storeName || 'DISTRIBUIDORA', 'DISTRIBUIDORA', 22);
+  const payerAddress = buildMercadoPagoAddress(credentials);
+  const payerIdentification = compactObject({
+    type: getCredential(credentials, 'payerIdentificationType'),
+    number: onlyDigits(credentials.payerIdentificationNumber),
+  });
+  const payerPhone = compactObject({
+    area_code: onlyDigits(credentials.payerPhoneAreaCode),
+    number: onlyDigits(credentials.payerPhoneNumber),
+  });
+  const orderItems = buildMercadoPagoItems(items);
+  const additionalInfo = compactObject({
+    'payer.registration_date': getCredential(credentials, 'payerRegistrationDate'),
+    'payer.authentication_type': getCredential(credentials, 'payerAuthenticationType') || 'WEB',
+    'payer.is_first_purchase_online': credentials.payerIsFirstPurchaseOnline === undefined ? undefined : Boolean(credentials.payerIsFirstPurchaseOnline),
+    'shipment.local_pickup': credentials.shipmentLocalPickup === undefined ? true : Boolean(credentials.shipmentLocalPickup),
+  });
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+    'X-Idempotency-Key': referenceId,
+  };
+  const sessionId = String(deviceId || credentials.deviceId || '').trim();
+  if (sessionId) headers['X-meli-session-id'] = sessionId;
 
   const response = await fetch('https://api.mercadopago.com/v1/orders', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'X-Idempotency-Key': referenceId,
-    },
-    body: JSON.stringify({
+    headers,
+    body: JSON.stringify(compactObject({
       type: 'online',
       external_reference: referenceId,
       processing_mode: 'automatic',
-      total_amount: Number(amount).toFixed(2),
+      total_amount: formatAmount(amount),
       description: description || `Venda ${referenceId}`,
       payer: {
         email: payerEmail,
         first_name: isTest ? 'APRO' : (getCredential(credentials, 'payerFirstName') || 'Cliente'),
+        last_name: getCredential(credentials, 'payerLastName') || 'PDV',
+        identification: payerIdentification,
+        phone: payerPhone,
+        address: payerAddress,
       },
+      items: orderItems,
+      additional_info: additionalInfo,
       transactions: {
         payments: [
           {
-            amount: Number(amount).toFixed(2),
+            amount: formatAmount(amount),
             payment_method: {
               id: 'pix',
               type: 'bank_transfer',
+              statement_descriptor: statementDescriptor,
             },
           },
         ],
       },
-    }),
+    })),
   });
 
   const data = await response.json();
