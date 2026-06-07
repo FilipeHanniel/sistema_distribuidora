@@ -426,7 +426,7 @@ const validateMercadoPagoWebhookSignature = (req) => {
   }, {});
   if (!parts.ts || !parts.v1) return false;
 
-  const manifest = `id:${providerId};request-id:${requestId};ts:${parts.ts};`;
+  const manifest = `id:${String(providerId).toLowerCase()};request-id:${requestId};ts:${parts.ts};`;
   const expected = crypto
     .createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET)
     .update(manifest)
@@ -1900,7 +1900,16 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
 
 app.post('/api/webhooks/mercado-pago', async (req, res) => {
   try {
+    console.log('[Mercado Pago Webhook] Recebido:', JSON.stringify({
+      query: req.query,
+      type: req.body?.type || req.body?.topic || req.body?.action || null,
+      dataId: req.body?.data?.id || req.body?.id || null,
+      hasSignature: Boolean(req.headers['x-signature']),
+      requestId: req.headers['x-request-id'] || null,
+    }));
+
     if (!validateMercadoPagoWebhookSignature(req)) {
+      console.warn('[Mercado Pago Webhook] Assinatura invalida.');
       return res.status(401).json({ received: false, error: 'Assinatura invalida.' });
     }
 
