@@ -7,6 +7,12 @@ import Modal from '../components/Modal';
 import type { CardTransaction, PixAccount, PixTransaction, Product, SaleItem } from '../types';
 import './Sales.css';
 
+interface PaymentRuntimeConfig {
+  pollingEnabled: boolean;
+  pollingIntervalMs: number;
+  webhookEnabled: boolean;
+}
+
 export default function Sales() {
   const [searchTerm, setSearchTerm] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -31,6 +37,11 @@ export default function Sales() {
   const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
   const [cardWaiting, setCardWaiting] = useState(false);
   const [checkoutProcessing, setCheckoutProcessing] = useState(false);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentRuntimeConfig>({
+    pollingEnabled: true,
+    pollingIntervalMs: 10000,
+    webhookEnabled: true,
+  });
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -60,6 +71,20 @@ export default function Sales() {
         setSelectedCardAccountId(cardReady.find(a => a.isDefault)?.id || cardReady[0]?.id || '');
       })
       .catch(() => setPixAccounts([]));
+  }, []);
+
+  useEffect(() => {
+    apiRequest<PaymentRuntimeConfig>('/payments/config')
+      .then(config => setPaymentConfig({
+        pollingEnabled: config.pollingEnabled !== false,
+        pollingIntervalMs: Math.max(3000, Number(config.pollingIntervalMs || 10000)),
+        webhookEnabled: config.webhookEnabled !== false,
+      }))
+      .catch(() => setPaymentConfig({
+        pollingEnabled: true,
+        pollingIntervalMs: 10000,
+        webhookEnabled: true,
+      }));
   }, []);
 
   const categories = useMemo(() => {
@@ -220,7 +245,7 @@ export default function Sales() {
   };
 
   useEffect(() => {
-    if (!pixWaiting || !pixTransaction?.id) return;
+    if (!pixWaiting || !pixTransaction?.id || !paymentConfig.pollingEnabled) return;
     const timer = window.setInterval(async () => {
       const updated = await checkPixPayment(pixTransaction.id);
       if (!updated) return;
@@ -240,12 +265,12 @@ export default function Sales() {
         setPixWaiting(false);
         setCheckoutProcessing(false);
       }
-    }, 3000);
+    }, paymentConfig.pollingIntervalMs);
     return () => window.clearInterval(timer);
-  }, [pixWaiting, pixTransaction?.id, checkPixPayment]);
+  }, [pixWaiting, pixTransaction?.id, checkPixPayment, paymentConfig.pollingEnabled, paymentConfig.pollingIntervalMs]);
 
   useEffect(() => {
-    if (!cardWaiting || !cardTransaction?.id) return;
+    if (!cardWaiting || !cardTransaction?.id || !paymentConfig.pollingEnabled) return;
     const timer = window.setInterval(async () => {
       const updated = await checkCardPayment(cardTransaction.id);
       if (!updated) return;
@@ -265,9 +290,9 @@ export default function Sales() {
         setCardWaiting(false);
         setCheckoutProcessing(false);
       }
-    }, 3000);
+    }, paymentConfig.pollingIntervalMs);
     return () => window.clearInterval(timer);
-  }, [cardWaiting, cardTransaction?.id, checkCardPayment]);
+  }, [cardWaiting, cardTransaction?.id, checkCardPayment, paymentConfig.pollingEnabled, paymentConfig.pollingIntervalMs]);
 
   const handleQuickProductSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -561,7 +586,7 @@ export default function Sales() {
             {pixTransaction.ticketUrl && (
               <div className="pix-test-payment">
                 <strong>Pagamento manual de teste</strong>
-                <span>Abra a pagina do Pix e pague usando a conta comprador de teste do Mercado Pago. Esta tela continuara consultando a confirmacao automaticamente.</span>
+                <span>Abra a pagina do Pix e pague usando a conta comprador de teste do Mercado Pago. A confirmacao sera recebida pelo webhook ou pela consulta de seguranca.</span>
                 <a className="pix-ticket-link" href={pixTransaction.ticketUrl} target="_blank" rel="noreferrer">Abrir pagina do Pix</a>
               </div>
             )}
@@ -570,7 +595,9 @@ export default function Sales() {
               {pixCancelling
                 ? 'Cancelando a cobranca Pix...'
                 : pixWaiting
-                  ? 'O sistema esta consultando a confirmacao automaticamente. Clique no X para cancelar esta cobranca.'
+                  ? paymentConfig.pollingEnabled
+                    ? `Aguardando webhook. Consulta de seguranca a cada ${Math.round(paymentConfig.pollingIntervalMs / 1000)} segundos. Clique no X para cancelar.`
+                    : 'Aguardando confirmacao exclusivamente pelo webhook. Clique no X para cancelar.'
                   : 'A cobranca nao esta mais em consulta automatica.'}
             </div>
           </div>
@@ -594,7 +621,11 @@ export default function Sales() {
             </div>
 
             <div className="pix-waiting-note">
-              {cardWaiting ? 'O sistema esta consultando a confirmacao automaticamente.' : 'A transacao nao esta mais em consulta automatica.'}
+              {cardWaiting
+                ? paymentConfig.pollingEnabled
+                  ? `Consulta automatica a cada ${Math.round(paymentConfig.pollingIntervalMs / 1000)} segundos.`
+                  : 'Aguardando confirmacao sem consulta automatica.'
+                : 'A transacao nao esta mais em consulta automatica.'}
             </div>
           </div>
         )}

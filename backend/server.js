@@ -40,6 +40,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-202
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET || '';
+const PAYMENT_POLLING_ENABLED = String(process.env.PAYMENT_POLLING_ENABLED || 'true').toLowerCase() !== 'false';
+const configuredPollingInterval = Number(process.env.PAYMENT_POLLING_INTERVAL_MS || 10000);
+const PAYMENT_POLLING_INTERVAL_MS = Number.isFinite(configuredPollingInterval)
+  ? Math.max(3000, configuredPollingInterval)
+  : 10000;
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -1578,6 +1583,14 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
     console.error('[Pix Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/payments/config', authenticateToken, isTenantUser, (req, res) => {
+  res.json({
+    pollingEnabled: PAYMENT_POLLING_ENABLED,
+    pollingIntervalMs: PAYMENT_POLLING_INTERVAL_MS,
+    webhookEnabled: true,
+  });
 });
 
 app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res) => {
