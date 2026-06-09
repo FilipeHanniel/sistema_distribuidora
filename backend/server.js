@@ -440,8 +440,9 @@ const validateMercadoPagoWebhookSignature = (req) => {
       manifest,
       secretLength: MERCADO_PAGO_WEBHOOK_SECRET.length,
       secretFingerprint: crypto.createHash('sha256').update(MERCADO_PAGO_WEBHOOK_SECRET).digest('hex').slice(0, 12),
-      expectedPrefix: expected.slice(0, 12),
-      receivedPrefix: String(parts.v1).slice(0, 12),
+      timestamp: parts.ts,
+      expectedSignature: expected,
+      receivedSignature: String(parts.v1),
     });
   }
 
