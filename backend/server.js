@@ -39,7 +39,8 @@ const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-2024';
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET || '';
+const MERCADO_PAGO_WEBHOOK_SECRET = String(process.env.MERCADO_PAGO_WEBHOOK_SECRET || '').trim();
+const MERCADO_PAGO_WEBHOOK_DEBUG = String(process.env.MERCADO_PAGO_WEBHOOK_DEBUG || 'false').toLowerCase() === 'true';
 const PAYMENT_POLLING_ENABLED = String(process.env.PAYMENT_POLLING_ENABLED || 'true').toLowerCase() !== 'false';
 const configuredPollingInterval = Number(process.env.PAYMENT_POLLING_INTERVAL_MS || 10000);
 const PAYMENT_POLLING_INTERVAL_MS = Number.isFinite(configuredPollingInterval)
@@ -431,8 +432,20 @@ const validateMercadoPagoWebhookSignature = (req) => {
     .createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET)
     .update(manifest)
     .digest('hex');
-  if (expected.length !== parts.v1.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
+  const valid = expected.length === parts.v1.length
+    && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
+
+  if (!valid && MERCADO_PAGO_WEBHOOK_DEBUG) {
+    console.warn('[Mercado Pago Webhook] Diagnostico da assinatura:', {
+      manifest,
+      secretLength: MERCADO_PAGO_WEBHOOK_SECRET.length,
+      secretFingerprint: crypto.createHash('sha256').update(MERCADO_PAGO_WEBHOOK_SECRET).digest('hex').slice(0, 12),
+      expectedPrefix: expected.slice(0, 12),
+      receivedPrefix: String(parts.v1).slice(0, 12),
+    });
+  }
+
+  return valid;
 };
 
 const sanitizeFiscalSettings = (settings) => {

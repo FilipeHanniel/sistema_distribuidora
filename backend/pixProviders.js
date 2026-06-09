@@ -141,6 +141,7 @@ async function fetchMercadoPagoJson(url, accessToken, fallbackMessage) {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
+      'X-Idempotency-Key': `cancel-${transaction.id}`,
     },
   });
   const data = await response.json();
