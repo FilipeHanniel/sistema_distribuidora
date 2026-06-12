@@ -14,7 +14,7 @@ const { getFiscalProvider } = require('./fiscalProviders');
 
 const app = express();
 
-const loadEnvFile = (filePath) => {
+const loadEnvFile = (filePath, { override = false } = {}) => {
   if (!fs.existsSync(filePath)) return;
   const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
@@ -24,11 +24,13 @@ const loadEnvFile = (filePath) => {
     if (separator === -1) continue;
     const key = trimmed.slice(0, separator).trim();
     const value = trimmed.slice(separator + 1).trim().replace(/^["']|["']$/g, '');
-    if (key && process.env[key] === undefined) process.env[key] = value;
+    if (key && (override || process.env[key] === undefined)) process.env[key] = value;
   }
 };
 
-loadEnvFile(path.join(__dirname, '..', '.env'));
+// The project .env is the deployment source of truth. This prevents stale
+// variables retained by process managers from shadowing updated credentials.
+loadEnvFile(path.join(__dirname, '..', '.env'), { override: true });
 loadEnvFile(path.join(__dirname, '.env'));
 
 // ==============================
