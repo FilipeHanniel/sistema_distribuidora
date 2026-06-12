@@ -318,10 +318,9 @@ const initDB = () => {
     const gestorAlready = db.prepare("SELECT id FROM users WHERE username = 'gestor' AND isDeleted = 0").get();
 
     if (adminUser && !gestorAlready) {
-      const salt = bcrypt.genSaltSync(10);
-      db.prepare("UPDATE users SET username = 'gestor', name = 'Gestor Padrão', password = ? WHERE id = ?")
-        .run(bcrypt.hashSync('gestor123', salt), adminUser.id);
-      console.log('🔄 Login "admin" renomeado para "gestor" (senha: gestor123)');
+      db.prepare("UPDATE users SET username = 'gestor', name = 'Gestor Padrão' WHERE id = ?")
+        .run(adminUser.id);
+      console.log('🔄 Login legado "admin" renomeado para "gestor".');
     } else if (adminUser && gestorAlready) {
       // Desativar o 'admin' duplicado
       db.prepare("UPDATE users SET isDeleted = 1 WHERE username = 'admin' AND role = 'gestor'").run();
@@ -334,25 +333,30 @@ const initDB = () => {
   const superAdminExists = db.prepare("SELECT id FROM users WHERE role = 'superadmin'").get();
   if (!superAdminExists) {
     const salt = bcrypt.genSaltSync(10);
-    const SUPERADMIN_PWD = process.env.SUPERADMIN_PASSWORD || 'superadmin123';
+    const isProduction = process.env.NODE_ENV === 'production';
+    const configuredPassword = String(process.env.SUPERADMIN_PASSWORD || '').trim();
+    if (isProduction && (!configuredPassword || configuredPassword === 'troque_em_producao')) {
+      throw new Error('SUPERADMIN_PASSWORD seguro e obrigatorio na primeira inicializacao em producao.');
+    }
+    const SUPERADMIN_PWD = configuredPassword || 'superadmin123';
     db.prepare(`
       INSERT INTO users (id, username, password, name, role, active, isDeleted, createdAt)
       VALUES ('superadmin-uuid-1', 'superadmin', ?, 'Super Administrador', 'superadmin', 1, 0, ?)
     `).run(bcrypt.hashSync(SUPERADMIN_PWD, salt), new Date().toISOString());
-    console.log('🔑 SuperAdmin: superadmin / ' + SUPERADMIN_PWD);
+    console.log('🔑 Usuario SuperAdmin inicial criado.');
   }
 
   // Criar gestor padrão se nenhum existir no estabelecimento padrão
   const gestorCount = db.prepare(
     "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'gestor' AND isDeleted = 0"
   ).get(DEFAULT_EST_ID);
-  if (gestorCount.c === 0) {
+  if (gestorCount.c === 0 && process.env.NODE_ENV !== 'production') {
     const salt = bcrypt.genSaltSync(10);
     db.prepare(`
       INSERT OR IGNORE INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
       VALUES ('gestor-default-1', 'gestor', ?, 'Gestor Padrão', 'gestor', ?, 1, 0, ?)
     `).run(bcrypt.hashSync('gestor123', salt), DEFAULT_EST_ID, new Date().toISOString());
-    console.log('👔 Gestor padrão: gestor / gestor123');
+    console.log('👔 Gestor padrao de desenvolvimento criado.');
   }
 
   console.log('Banco de Dados SQLite conectado e tabelas verificadas!');

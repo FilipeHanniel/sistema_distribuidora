@@ -38,7 +38,6 @@ const providerLabel = (provider?: string) => {
 };
 
 const confirmationSourceLabel = (source?: string) => {
-  if (source === 'webhook') return 'Webhook';
   if (source === 'polling' || source === 'provider') return 'Consulta automatica';
   if (source === 'simulated') return 'Simulado';
   return 'Nao informado';

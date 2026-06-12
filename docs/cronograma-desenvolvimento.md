@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 27/05/2026
+Atualizado em: 12/06/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -17,15 +17,15 @@ Objetivo: garantir que o sistema rode com confianca em ambiente real, sem depend
 
 ## Fase 2 - Pagamentos profissionais
 
-Status: iniciado
+Status: em andamento
 
 Objetivo: deixar Pix e cartao preparados para uso real por estabelecimento.
 
 - Consolidar tela de Recebimentos.
 - Melhorar edicao de contas e ocultacao de contas inativas.
-- Finalizar Mercado Pago Pix em ambiente de teste.
-- Registrar confirmacao do provedor no comprovante.
-- Implementar webhook Mercado Pago para confirmacao passiva.
+- Mercado Pago Pix em ambiente de teste confirmado por polling. [docs/pagamentos-pix.md](pagamentos-pix.md)
+- Registrar confirmacao do provedor e canal de consulta no comprovante.
+- Validar webhook Mercado Pago somente em ambiente de producao controlado.
 - Criar painel de transacoes de pagamento.
 - Definir padrao para novos provedores: Asaas, Sicoob, Itau, Santander, Bradesco.
 
@@ -113,9 +113,11 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 ## Proximo passo recomendado
 
-Concluir a Fase 1 antes de expandir muito:
+Consolidar a Fase 2 sem depender do webhook em sandbox:
 
-1. Criar backup automatico do SQLite no VPS.
-2. Documentar o deploy e atualizacao.
-3. Validar novamente venda + Pix Mercado Pago teste + fiscal fake + comprovante.
-4. Depois disso, avançar para webhook Mercado Pago.
+1. Validar novamente venda + Pix Mercado Pago teste por polling + fiscal fake + comprovante.
+2. Criar painel de transacoes de pagamento para suporte e conciliacao.
+3. Preparar testes automatizados de venda duplicada e falha fiscal.
+4. Retomar webhook apenas com uma cobranca real controlada.
+
+Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

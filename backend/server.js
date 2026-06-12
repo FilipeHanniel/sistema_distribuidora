@@ -7,14 +7,12 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const db = require('./database');
-const { addOneMonth } = require('./database');
 const { PROVIDERS, getPixProvider, getPointProvider, makeProviderReference } = require('./pixProviders');
 const { getFiscalProvider } = require('./fiscalProviders');
 
 const app = express();
 
-const loadEnvFile = (filePath, { override = false } = {}) => {
+const loadEnvFile = (filePath) => {
   if (!fs.existsSync(filePath)) return;
   const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
@@ -24,30 +22,41 @@ const loadEnvFile = (filePath, { override = false } = {}) => {
     if (separator === -1) continue;
     const key = trimmed.slice(0, separator).trim();
     const value = trimmed.slice(separator + 1).trim().replace(/^["']|["']$/g, '');
-    if (key && (override || process.env[key] === undefined)) process.env[key] = value;
+    if (key && process.env[key] === undefined) process.env[key] = value;
   }
 };
 
-// The project .env is the deployment source of truth. This prevents stale
-// variables retained by process managers from shadowing updated credentials.
-loadEnvFile(path.join(__dirname, '..', '.env'), { override: true });
+loadEnvFile(path.join(__dirname, '..', '.env'));
 loadEnvFile(path.join(__dirname, '.env'));
+
+const db = require('./database');
+const { addOneMonth } = require('./database');
 
 // ==============================
 // CONFIGURAÇÃO
 // ==============================
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-const JWT_SECRET = process.env.JWT_SECRET || 'pepsi-distribuidora-secret-key-2024';
-const MASTER_PASSWORD = process.env.MASTER_PASSWORD || 'dev_master';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const MERCADO_PAGO_WEBHOOK_SECRET = String(process.env.MERCADO_PAGO_WEBHOOK_SECRET || '').trim();
-const MERCADO_PAGO_WEBHOOK_DEBUG = String(process.env.MERCADO_PAGO_WEBHOOK_DEBUG || 'false').toLowerCase() === 'true';
-const PAYMENT_POLLING_ENABLED = String(process.env.PAYMENT_POLLING_ENABLED || 'true').toLowerCase() !== 'false';
+const JWT_SECRET_PLACEHOLDERS = new Set(['', 'pepsi-distribuidora-secret-key-2024', 'troque_por_um_segredo_longo_em_producao']);
+const MASTER_PASSWORD_PLACEHOLDERS = new Set(['', 'dev_master', 'troque_ou_remova_em_producao']);
+const configuredJwtSecret = String(process.env.JWT_SECRET || '').trim();
+if (NODE_ENV === 'production' && JWT_SECRET_PLACEHOLDERS.has(configuredJwtSecret)) {
+  throw new Error('JWT_SECRET seguro e obrigatorio em producao.');
+}
+const JWT_SECRET = configuredJwtSecret || 'pepsi-distribuidora-secret-key-2024';
+const configuredMasterPassword = String(process.env.MASTER_PASSWORD || '').trim();
+const MASTER_PASSWORD = MASTER_PASSWORD_PLACEHOLDERS.has(configuredMasterPassword)
+  ? (NODE_ENV === 'production' ? '' : 'dev_master')
+  : configuredMasterPassword;
 const configuredPollingInterval = Number(process.env.PAYMENT_POLLING_INTERVAL_MS || 10000);
 const PAYMENT_POLLING_INTERVAL_MS = Number.isFinite(configuredPollingInterval)
   ? Math.max(3000, configuredPollingInterval)
   : 10000;
+const configuredProcessingTimeout = Number(process.env.PAYMENT_PROCESSING_TIMEOUT_MS || 120000);
+const PAYMENT_PROCESSING_TIMEOUT_MS = Number.isFinite(configuredProcessingTimeout)
+  ? Math.max(30000, configuredProcessingTimeout)
+  : 120000;
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -278,63 +287,40 @@ const parseTransactionPayload = (transaction) => {
   try { return JSON.parse(transaction?.payload || '{}'); } catch { return {}; }
 };
 
-const paymentMatchesProviderId = (transaction, providerId) => {
-  if (!providerId) return false;
-  const id = String(providerId);
-  const payload = parseTransactionPayload(transaction);
-  const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
-  const payment = providerPayload.transactions?.payments?.[0] || {};
-  const ticketUrl = payment.payment_method?.ticket_url || transaction.ticketUrl || '';
-  return [
-    transaction.providerTransactionId,
-    payload.providerPaymentId,
-    payload.externalReference,
-    providerPayload.id,
-    providerPayload.external_reference,
-    payment.id,
-    payment.reference_id,
-  ].filter(Boolean).map(String).includes(id) || ticketUrl.includes(`/payments/${id}/`);
-};
+const finalizePaidTransaction = async ({ transactionId, userId = null }) => {
+  const linkExistingSale = () => {
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transactionId);
+    if (!transaction || transaction.saleId) return transaction;
 
-const findPaymentTransactionByProviderId = (providerId) => {
-  const direct = db.prepare(`
-    SELECT *
-    FROM payment_transactions
-    WHERE provider = 'mercado_pago'
-      AND paymentMethod = 'pix'
-      AND providerTransactionId = ?
-    ORDER BY createdAt DESC
-    LIMIT 1
-  `).get(String(providerId || ''));
-  if (direct) return direct;
+    const existingSale = db.prepare('SELECT id FROM sales WHERE id = ? AND establishmentId = ?')
+      .get(transactionId, transaction.establishmentId);
+    if (!existingSale) return transaction;
 
-  const candidates = db.prepare(`
-    SELECT *
-    FROM payment_transactions
-    WHERE provider = 'mercado_pago'
-      AND paymentMethod = 'pix'
-      AND status IN ('pending', 'paid')
-    ORDER BY createdAt DESC
-    LIMIT 100
-  `).all();
-  return candidates.find(transaction => paymentMatchesProviderId(transaction, providerId)) || null;
-};
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE payment_transactions
+      SET saleId = ?, status = 'paid', paidAt = COALESCE(paidAt, ?), updatedAt = ?
+      WHERE id = ? AND saleId IS NULL
+    `).run(existingSale.id, now, now, transactionId);
+    return db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transactionId);
+  };
 
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  let current = linkExistingSale();
+  if (!current || current.saleId) return current;
 
-const findPaymentTransactionWithRetry = async (providerIds, attempts = 10, delayMs = 500) => {
-  const ids = [...new Set(providerIds.filter(Boolean).map(String))];
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    for (const providerId of ids) {
-      const transaction = findPaymentTransactionByProviderId(providerId);
-      if (transaction) return transaction;
-    }
-    if (attempt < attempts - 1) await wait(delayMs);
+  if (current.status === 'processing') {
+    const processingStartedAt = new Date(current.updatedAt || current.createdAt || 0).getTime();
+    const processingExpired = !Number.isFinite(processingStartedAt)
+      || Date.now() - processingStartedAt >= PAYMENT_PROCESSING_TIMEOUT_MS;
+    if (!processingExpired) return current;
+
+    db.prepare(`
+      UPDATE payment_transactions
+      SET status = 'paid', updatedAt = ?
+      WHERE id = ? AND saleId IS NULL AND status = 'processing'
+    `).run(new Date().toISOString(), transactionId);
   }
-  return null;
-};
 
-const finalizePaidPixTransaction = async ({ transactionId, userId = null }) => {
   const claim = db.prepare(`
     UPDATE payment_transactions
     SET status = 'processing', updatedAt = ?
@@ -346,17 +332,24 @@ const finalizePaidPixTransaction = async ({ transactionId, userId = null }) => {
   }
 
   try {
-    const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transactionId);
+    current = linkExistingSale();
+    if (current?.saleId) return current;
+
+    const fresh = current;
     const stored = parseTransactionPayload(fresh);
-    const storedItems = stored.items || [];
-    validateSaleItemsForTenant(storedItems, fresh.establishmentId);
+    const preparedSale = validateSaleItemsForTenant(stored.items || [], fresh.establishmentId, {
+      expectedTotal: fresh.amount,
+      useCurrentPrices: false,
+    });
+    const storedItems = preparedSale.items;
     const operator = userId || db.prepare(`
       SELECT id FROM users
       WHERE establishmentId = ? AND role IN ('gestor', 'operador') AND active = 1 AND isDeleted = 0
       ORDER BY role = 'gestor' DESC, createdAt ASC
       LIMIT 1
     `).get(fresh.establishmentId)?.id || null;
-    const saleResult = await createPaidSale(storedItems, fresh.amount, 'pix', operator, fresh.establishmentId);
+    const paymentMethod = ['pix', 'card'].includes(fresh.paymentMethod) ? fresh.paymentMethod : 'pix';
+    const saleResult = await createPaidSale(storedItems, fresh.amount, paymentMethod, operator, fresh.establishmentId, fresh.id);
     db.prepare(`
       UPDATE payment_transactions
       SET saleId = ?, status = 'paid', paidAt = COALESCE(paidAt, ?), updatedAt = ?
@@ -364,13 +357,16 @@ const finalizePaidPixTransaction = async ({ transactionId, userId = null }) => {
     `).run(saleResult.saleId, new Date().toISOString(), new Date().toISOString(), transactionId);
     return db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transactionId);
   } catch (err) {
+    const recovered = linkExistingSale();
+    if (recovered?.saleId) return recovered;
+
     db.prepare(`UPDATE payment_transactions SET status = 'paid', updatedAt = ? WHERE id = ? AND status = 'processing'`)
       .run(new Date().toISOString(), transactionId);
     throw err;
   }
 };
 
-const updatePaymentTransactionFromProvider = async ({ transaction, source, userId = null }) => {
+const refreshPixTransactionFromProvider = async ({ transaction, userId = null }) => {
   const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, transaction.establishmentId);
   if (!account) throw new Error('Conta Pix da transacao nao encontrada.');
 
@@ -384,17 +380,22 @@ const updatePaymentTransactionFromProvider = async ({ transaction, source, userI
     providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
     externalReference: statusResult.externalReference || currentPayload.externalReference || null,
     latestProviderPayload: statusResult.payload || null,
-    confirmationSource: statusResult.status === 'paid' ? source : currentPayload.confirmationSource,
+    confirmationSource: statusResult.status === 'paid' ? 'polling' : currentPayload.confirmationSource,
   };
   const status = statusResult.status;
   const paidAt = statusResult.paidAt || transaction.paidAt || null;
-  db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
-    .run(status, paidAt, new Date().toISOString(), JSON.stringify(nextPayload), transaction.id);
+  db.prepare(`
+    UPDATE payment_transactions
+    SET status = ?, paidAt = ?, updatedAt = ?, payload = ?
+    WHERE id = ? AND saleId IS NULL AND status = 'pending'
+  `).run(status, paidAt, new Date().toISOString(), JSON.stringify(nextPayload), transaction.id);
 
-  let saleId = transaction.saleId;
+  let latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+  let saleId = latest.saleId;
   let fiscalDocument = null;
-  if (status === 'paid' && !saleId) {
-    const finalized = await finalizePaidPixTransaction({ transactionId: transaction.id, userId });
+  if (latest.status === 'paid' && !saleId) {
+    const finalized = await finalizePaidTransaction({ transactionId: transaction.id, userId });
+    latest = finalized;
     saleId = finalized.saleId || null;
     if (saleId) {
       fiscalDocument = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
@@ -406,58 +407,13 @@ const updatePaymentTransactionFromProvider = async ({ transaction, source, userI
   }
 
   return {
-    transaction: db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id),
-    status,
-    paidAt,
+    transaction: latest,
+    status: latest.status,
+    paidAt: latest.paidAt,
     saleId,
     fiscalDocument,
-    payload: nextPayload,
+    payload: parseTransactionPayload(latest),
   };
-};
-
-const validateMercadoPagoWebhookSignature = (req) => {
-  if (!MERCADO_PAGO_WEBHOOK_SECRET) return true;
-  const signatureHeader = req.headers['x-signature'];
-  const requestId = req.headers['x-request-id'];
-  const providerIdFromUrl = req.query['data.id'];
-  if (!signatureHeader) return false;
-
-  const parts = String(signatureHeader).split(',').reduce((acc, part) => {
-    const [key, value] = part.split('=').map(v => v.trim());
-    if (key && value) acc[key] = value;
-    return acc;
-  }, {});
-  if (!parts.ts || !parts.v1) return false;
-
-  const manifestParts = [];
-  if (providerIdFromUrl) manifestParts.push(`id:${String(providerIdFromUrl).toLowerCase()};`);
-  if (requestId) manifestParts.push(`request-id:${requestId};`);
-  manifestParts.push(`ts:${parts.ts};`);
-  const manifest = manifestParts.join('');
-
-  const expected = crypto
-    .createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET)
-    .update(manifest)
-    .digest('hex');
-  const valid = expected.length === parts.v1.length
-    && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
-
-  if (!valid && MERCADO_PAGO_WEBHOOK_DEBUG) {
-    console.warn('[Mercado Pago Webhook] Diagnostico da assinatura:', {
-      manifest,
-      secretLength: MERCADO_PAGO_WEBHOOK_SECRET.length,
-      secretFingerprint: crypto.createHash('sha256').update(MERCADO_PAGO_WEBHOOK_SECRET).digest('hex').slice(0, 12),
-      timestamp: parts.ts,
-      originalUrl: req.originalUrl,
-      queryDataId: providerIdFromUrl || null,
-      bodyDataId: req.body?.data?.id || req.body?.id || null,
-      hasRequestId: Boolean(requestId),
-      expectedSignature: expected,
-      receivedSignature: String(parts.v1),
-    });
-  }
-
-  return valid;
 };
 
 const sanitizeFiscalSettings = (settings) => {
@@ -633,20 +589,57 @@ const issueFiscalDocument = async (documentId, estId) => {
   return db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(documentId);
 };
 
-const validateSaleItemsForTenant = (items, estId) => {
+const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+const saleValidationError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const validateSaleItemsForTenant = (items, estId, { expectedTotal = null, useCurrentPrices = false } = {}) => {
   if (!items || !Array.isArray(items) || items.length === 0) {
-    throw new Error('Itens da venda sao obrigatorios.');
+    throw saleValidationError('Itens da venda sao obrigatorios.');
   }
-  for (const item of items) {
-    const product = db.prepare('SELECT id, stock FROM products WHERE id = ? AND establishmentId = ?').get(item.productId, estId);
-    if (!product) throw new Error(`Produto '${item.name}' nao pertence a este estabelecimento.`);
-    if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0) {
-      throw new Error(`Quantidade invalida para '${item.name}'.`);
-    }
-    if (product.stock < Number(item.quantity)) {
-      throw new Error(`Estoque insuficiente para '${item.name}'.`);
-    }
+  if (expectedTotal !== null && (!Number.isFinite(Number(expectedTotal)) || Number(expectedTotal) < 0)) {
+    throw saleValidationError('Valor total da venda invalido.');
   }
+
+  const normalizedItems = items.map((item) => {
+    const product = db.prepare('SELECT id, name, sellPrice, stock, category FROM products WHERE id = ? AND establishmentId = ?')
+      .get(item.productId, estId);
+    if (!product) throw saleValidationError(`Produto '${item.name}' nao pertence a este estabelecimento.`);
+
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw saleValidationError(`Quantidade invalida para '${product.name}'.`);
+    }
+    if (product.stock < quantity) {
+      throw saleValidationError(`Estoque insuficiente para '${product.name}'.`, 409);
+    }
+
+    const unitPrice = Number(useCurrentPrices ? product.sellPrice : item.unitPrice);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw saleValidationError(`Preco invalido para '${product.name}'.`);
+    }
+
+    return {
+      ...item,
+      productId: product.id,
+      name: product.name,
+      category: product.category || item.category || 'Geral',
+      quantity,
+      unitPrice: roundMoney(unitPrice),
+      totalPrice: roundMoney(unitPrice * quantity),
+    };
+  });
+
+  const totalAmount = roundMoney(normalizedItems.reduce((sum, item) => sum + item.totalPrice, 0));
+  if (expectedTotal !== null && Math.abs(totalAmount - roundMoney(expectedTotal)) > 0.009) {
+    throw saleValidationError('O valor da venda mudou. Atualize o carrinho e tente novamente.', 409);
+  }
+
+  return { items: normalizedItems, totalAmount };
 };
 
 const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, saleId = uuidv4()) => {
@@ -655,10 +648,17 @@ const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, 
     db.prepare('INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(saleId, totalAmount, paymentMethod, 'PENDENTE', userId, estId, now);
     const insertItemStmt = db.prepare(`INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice) VALUES (?, ?, ?, ?, ?, ?)`);
-    const updateStockStmt = db.prepare(`UPDATE products SET stock = stock - ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`);
+    const updateStockStmt = db.prepare(`
+      UPDATE products
+      SET stock = stock - ?, updatedAt = ?
+      WHERE id = ? AND establishmentId = ? AND stock >= ?
+    `);
     for (const item of items) {
+      const stockUpdate = updateStockStmt.run(item.quantity, now, item.productId, estId, item.quantity);
+      if (stockUpdate.changes !== 1) {
+        throw saleValidationError(`Estoque insuficiente para '${item.name}'.`, 409);
+      }
       insertItemStmt.run(saleId, item.productId, item.name, item.quantity, item.unitPrice, item.totalPrice);
-      updateStockStmt.run(item.quantity, now, item.productId, estId);
     }
   });
   insertSale();
@@ -911,7 +911,7 @@ app.post('/api/login', (req, res) => {
     if (!user) return res.status(401).json({ error: 'Usuário não encontrado.' });
     if (user.active === 0) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o gestor.' });
 
-    const isMaster = (password === MASTER_PASSWORD);
+    const isMaster = Boolean(MASTER_PASSWORD) && password === MASTER_PASSWORD;
     const isPasswordCorrect = bcrypt.compareSync(password, user.password);
     if (!isMaster && !isPasswordCorrect) {
       return res.status(401).json({ error: 'Senha incorreta.' });
@@ -1091,7 +1091,8 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
   const userId = req.user.id;
   try {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    if (!bcrypt.compareSync(currentPassword, user.password) && currentPassword !== MASTER_PASSWORD) {
+    const isMaster = Boolean(MASTER_PASSWORD) && currentPassword === MASTER_PASSWORD;
+    if (!bcrypt.compareSync(currentPassword, user.password) && !isMaster) {
       return res.status(401).json({ error: 'Senha atual incorreta.' });
     }
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), userId);
@@ -1560,8 +1561,11 @@ app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
   const saleId = uuidv4();
 
   try {
-    validateSaleItemsForTenant(items, estId);
-    const saleResult = await createPaidSale(items, totalAmount, paymentMethod, req.user.id, estId, saleId);
+    if (paymentMethod !== 'money') {
+      throw saleValidationError('Pagamentos Pix e cartao devem ser confirmados pelo provider antes da venda.', 409);
+    }
+    const preparedSale = validateSaleItemsForTenant(items, estId, { expectedTotal: totalAmount, useCurrentPrices: true });
+    const saleResult = await createPaidSale(preparedSale.items, preparedSale.totalAmount, paymentMethod, req.user.id, estId, saleId);
     res.status(201).json({
       id: saleResult.saleId,
       fiscalDocument: saleResult.fiscalDocument,
@@ -1569,7 +1573,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
     });
   } catch (err) {
     console.error('[Sale Error]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -1577,7 +1581,7 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
   try {
     const { items, totalAmount, pixAccountId, deviceId } = req.body;
     const estId = req.user.establishmentId;
-    validateSaleItemsForTenant(items, estId);
+    const preparedSale = validateSaleItemsForTenant(items, estId, { expectedTotal: totalAmount, useCurrentPrices: true });
 
     const account = pixAccountId
       ? db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ? AND active = 1').get(pixAccountId, estId)
@@ -1595,11 +1599,11 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
     const referenceId = makeProviderReference();
     const provider = getPixProvider(account.provider);
     const charge = await provider.createCharge({
-      amount: totalAmount,
+      amount: preparedSale.totalAmount,
       referenceId,
       credentials: accountCredentials,
       description: `Venda PDV ${transactionId}`,
-      items,
+      items: preparedSale.items,
       deviceId,
     });
     const createdAt = new Date().toISOString();
@@ -1617,12 +1621,12 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       account.provider,
       charge.providerTransactionId,
       initialStatus,
-      totalAmount,
+      preparedSale.totalAmount,
       charge.qrCode || '',
       charge.qrCodeBase64 || '',
       charge.ticketUrl || '',
       JSON.stringify({
-        items,
+        items: preparedSale.items,
         providerPaymentId: charge.providerPaymentId || null,
         externalReference: charge.externalReference || referenceId,
         providerPayload: charge.payload || null,
@@ -1635,7 +1639,7 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
     res.status(201).json({
       id: transactionId,
       status: initialStatus,
-      amount: totalAmount,
+      amount: preparedSale.totalAmount,
       provider: account.provider,
       providerTransactionId: charge.providerTransactionId,
       providerPaymentId: charge.providerPaymentId || null,
@@ -1648,15 +1652,14 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
     });
   } catch (err) {
     console.error('[Pix Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 app.get('/api/payments/config', authenticateToken, isTenantUser, (req, res) => {
   res.json({
-    pollingEnabled: PAYMENT_POLLING_ENABLED,
+    strategy: 'polling',
     pollingIntervalMs: PAYMENT_POLLING_INTERVAL_MS,
-    webhookEnabled: true,
   });
 });
 
@@ -1664,7 +1667,7 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
   try {
     const { items, totalAmount, accountId } = req.body;
     const estId = req.user.establishmentId;
-    validateSaleItemsForTenant(items, estId);
+    const preparedSale = validateSaleItemsForTenant(items, estId, { expectedTotal: totalAmount, useCurrentPrices: true });
 
     const account = accountId
       ? db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ? AND active = 1').get(accountId, estId)
@@ -1683,7 +1686,7 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
     const referenceId = makeProviderReference();
     const provider = getPointProvider(account.provider);
     const order = await provider.createOrder({
-      amount: totalAmount,
+      amount: preparedSale.totalAmount,
       referenceId,
       credentials,
       description: `Venda PDV ${transactionId}`,
@@ -1702,8 +1705,8 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       account.provider,
       order.providerTransactionId,
       order.status,
-      totalAmount,
-      JSON.stringify({ items, providerPaymentId: order.providerPaymentId || null, providerPayload: order.payload || null }),
+      preparedSale.totalAmount,
+      JSON.stringify({ items: preparedSale.items, providerPaymentId: order.providerPaymentId || null, providerPayload: order.payload || null }),
       order.expiresAt || null,
       createdAt,
       createdAt
@@ -1712,7 +1715,7 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
     res.status(201).json({
       id: transactionId,
       status: order.status,
-      amount: totalAmount,
+      amount: preparedSale.totalAmount,
       provider: account.provider,
       providerTransactionId: order.providerTransactionId,
       terminalId: credentials.terminalId || '',
@@ -1720,62 +1723,54 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
     });
   } catch (err) {
     console.error('[Card Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
-    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
+    let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
       .get(req.params.id, estId, 'card');
     if (!transaction) return res.status(404).json({ error: 'Transacao de cartao nao encontrada.' });
 
-    let status = transaction.status;
-    let paidAt = transaction.paidAt;
-    let saleId = transaction.saleId;
-
-    if (status === 'pending') {
+    if (transaction.status === 'pending') {
       const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
       if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
       const statusResult = await getPointProvider(account.provider).getStatus({
         transaction,
         credentials: decodeCredentials(account.credentials),
       });
-      status = statusResult.status;
-      paidAt = statusResult.paidAt || paidAt;
-      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
-        .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
+      db.prepare(`
+        UPDATE payment_transactions
+        SET status = ?, paidAt = ?, updatedAt = ?, payload = ?
+        WHERE id = ? AND saleId IS NULL AND status = 'pending'
+      `).run(statusResult.status, statusResult.paidAt || transaction.paidAt || null, new Date().toISOString(), JSON.stringify({
           ...JSON.parse(transaction.payload || '{}'),
           latestProviderPayload: statusResult.payload || null,
         }), transaction.id);
+      transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
     }
 
-    if (status === 'paid' && !saleId) {
-      const fresh = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
-      const stored = JSON.parse(fresh.payload || '{}');
-      const storedItems = stored.items || [];
-      validateSaleItemsForTenant(storedItems, estId);
-      const saleResult = await createPaidSale(storedItems, fresh.amount, 'card', req.user.id, estId);
-      saleId = saleResult.saleId;
-      db.prepare('UPDATE payment_transactions SET saleId = ?, status = ?, paidAt = COALESCE(paidAt, ?), updatedAt = ? WHERE id = ?')
-        .run(saleId, 'paid', paidAt || new Date().toISOString(), new Date().toISOString(), transaction.id);
+    if (['paid', 'processing'].includes(transaction.status) && !transaction.saleId) {
+      transaction = await finalizePaidTransaction({ transactionId: transaction.id, userId: req.user.id });
     }
 
-    const fiscalDocument = saleId
-      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(saleId, estId) || null
+    const responseStatus = transaction.status === 'processing' ? 'pending' : transaction.status;
+    const fiscalDocument = transaction.saleId
+      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(transaction.saleId, estId) || null
       : null;
 
     res.json({
       id: transaction.id,
-      status,
-      saleId,
+      status: responseStatus,
+      saleId: transaction.saleId,
       fiscalDocument,
-      paidAt,
+      paidAt: transaction.paidAt,
       amount: transaction.amount,
       provider: transaction.provider,
       providerTransactionId: transaction.providerTransactionId,
-      paymentConfirmation: saleId ? getPaymentTransactionForSale(saleId, estId) : null,
+      paymentConfirmation: transaction.saleId ? getPaymentTransactionForSale(transaction.saleId, estId) : null,
       expiresAt: transaction.expiresAt,
     });
   } catch (err) {
@@ -1787,61 +1782,39 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
 app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
-    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
+    let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
     if (!transaction) return res.status(404).json({ error: 'Transacao Pix nao encontrada.' });
 
-    let status = transaction.status;
-    let paidAt = transaction.paidAt;
-    let saleId = transaction.saleId;
-
-    if (status === 'pending') {
-      const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
-      if (!account) return res.status(404).json({ error: 'Conta Pix da transacao nao encontrada.' });
-      const statusResult = await getPixProvider(account.provider).getStatus({
-        transaction,
-        credentials: decodeCredentials(account.credentials),
-      });
-      status = statusResult.status;
-      paidAt = statusResult.paidAt || paidAt;
-
-      const currentPayload = JSON.parse(transaction.payload || '{}');
-      db.prepare('UPDATE payment_transactions SET status = ?, paidAt = ?, updatedAt = ?, payload = ? WHERE id = ?')
-        .run(status, paidAt || null, new Date().toISOString(), JSON.stringify({
-          ...currentPayload,
-          providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
-          externalReference: statusResult.externalReference || currentPayload.externalReference || null,
-          confirmationSource: statusResult.status === 'paid' ? 'polling' : currentPayload.confirmationSource,
-          latestProviderPayload: statusResult.payload || null,
-        }), transaction.id);
+    let fiscalDocument = null;
+    if (transaction.status === 'pending') {
+      const refreshed = await refreshPixTransactionFromProvider({ transaction, userId: req.user.id });
+      transaction = refreshed.transaction;
+      fiscalDocument = refreshed.fiscalDocument;
+    } else if (['paid', 'processing'].includes(transaction.status) && !transaction.saleId) {
+      transaction = await finalizePaidTransaction({ transactionId: transaction.id, userId: req.user.id });
     }
 
-    if (status === 'paid' && !saleId) {
-      const finalized = await finalizePaidPixTransaction({ transactionId: transaction.id, userId: req.user.id });
-      saleId = finalized.saleId || null;
-      status = finalized.status === 'processing' ? 'pending' : finalized.status;
-    }
-
-    const fiscalDocument = saleId
-      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(saleId, estId) || null
-      : null;
-
-    const latestTransaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id) || transaction;
-    const responsePayload = JSON.parse(latestTransaction.payload || '{}');
+    const responseStatus = transaction.status === 'processing' ? 'pending' : transaction.status;
+    const responsePayload = parseTransactionPayload(transaction);
     const responseProviderPayload = responsePayload.latestProviderPayload || responsePayload.providerPayload || {};
     const responsePayment = responseProviderPayload.transactions?.payments?.[0] || {};
+    if (!fiscalDocument && transaction.saleId) {
+      fiscalDocument = db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
+        .get(transaction.saleId, estId) || null;
+    }
 
     res.json({
       id: transaction.id,
-      status,
-      saleId,
+      status: responseStatus,
+      saleId: transaction.saleId,
       fiscalDocument,
-      paidAt,
+      paidAt: transaction.paidAt,
       amount: transaction.amount,
       provider: transaction.provider,
       providerTransactionId: transaction.providerTransactionId,
       providerPaymentId: responsePayload.providerPaymentId || responsePayment.id || null,
       externalReference: responsePayload.externalReference || responseProviderPayload.external_reference || null,
-      paymentConfirmation: saleId ? getPaymentTransactionForSale(saleId, estId) : null,
+      paymentConfirmation: transaction.saleId ? getPaymentTransactionForSale(transaction.saleId, estId) : null,
       qrCode: transaction.qrCode,
       qrCodeBase64: transaction.qrCodeBase64,
       ticketUrl: transaction.ticketUrl,
@@ -1868,7 +1841,7 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
     if (transaction.status !== 'pending') {
       return res.json({
         id: transaction.id,
-        status: transaction.status,
+        status: transaction.status === 'processing' ? 'pending' : transaction.status,
         saleId: transaction.saleId,
         paidAt: transaction.paidAt,
         amount: transaction.amount,
@@ -1898,97 +1871,38 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
     };
     const status = cancelResult.status === 'paid' ? 'paid' : 'cancelled';
     const updatedAt = new Date().toISOString();
-    db.prepare('UPDATE payment_transactions SET status = ?, updatedAt = ?, payload = ? WHERE id = ?')
+    db.prepare(`
+      UPDATE payment_transactions
+      SET status = ?, updatedAt = ?, payload = ?
+      WHERE id = ? AND saleId IS NULL AND status = 'pending'
+    `)
       .run(status, updatedAt, JSON.stringify(nextPayload), transaction.id);
 
+    let latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+    if (latest.status === 'paid' && !latest.saleId) {
+      latest = await finalizePaidTransaction({ transactionId: latest.id, userId: req.user.id });
+    }
+    const responseStatus = latest.status === 'processing' ? 'pending' : latest.status;
+
     res.json({
-      id: transaction.id,
-      status,
-      saleId: transaction.saleId,
-      paidAt: transaction.paidAt,
-      amount: transaction.amount,
-      provider: transaction.provider,
-      providerTransactionId: transaction.providerTransactionId,
+      id: latest.id,
+      status: responseStatus,
+      saleId: latest.saleId,
+      paidAt: latest.paidAt,
+      amount: latest.amount,
+      provider: latest.provider,
+      providerTransactionId: latest.providerTransactionId,
       providerPaymentId: nextPayload.providerPaymentId || null,
       externalReference: nextPayload.externalReference || null,
-      paymentConfirmation: null,
-      qrCode: transaction.qrCode,
-      qrCodeBase64: transaction.qrCodeBase64,
-      ticketUrl: transaction.ticketUrl,
-      expiresAt: transaction.expiresAt,
+      paymentConfirmation: latest.saleId ? getPaymentTransactionForSale(latest.saleId, estId) : null,
+      qrCode: latest.qrCode,
+      qrCodeBase64: latest.qrCodeBase64,
+      ticketUrl: latest.ticketUrl,
+      expiresAt: latest.expiresAt,
     });
   } catch (err) {
     console.error('[Pix Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/webhooks/mercado-pago', async (req, res) => {
-  try {
-    console.log('[Mercado Pago Webhook] Recebido:', JSON.stringify({
-      query: req.query,
-      type: req.body?.type || req.body?.topic || req.body?.action || null,
-      dataId: req.body?.data?.id || req.body?.id || null,
-      hasSignature: Boolean(req.headers['x-signature']),
-      requestId: req.headers['x-request-id'] || null,
-    }));
-
-    if (!validateMercadoPagoWebhookSignature(req)) {
-      console.warn('[Mercado Pago Webhook] Assinatura invalida.');
-      return res.status(401).json({ received: false, error: 'Assinatura invalida.' });
-    }
-
-    const providerId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
-    const eventType = req.body?.type || req.body?.topic || req.body?.action || 'unknown';
-    if (String(eventType).includes('mp-connect') || String(req.body?.topic || '').includes('mp-connect')) {
-      console.log('[Mercado Pago Webhook] Evento OAuth/mp-connect recebido:', JSON.stringify(req.body));
-      return res.status(200).json({
-        received: true,
-        processed: true,
-        event: 'mp-connect',
-      });
-    }
-
-    if (!providerId) {
-      return res.status(200).json({ received: true, processed: false, reason: 'Evento sem identificador.' });
-    }
-
-    const webhookPayments = Array.isArray(req.body?.data?.payments) ? req.body.data.payments : [];
-    const providerIds = [
-      providerId,
-      req.body?.data?.external_reference,
-      req.body?.external_reference,
-      ...webhookPayments.flatMap(payment => [payment?.id, payment?.reference_id]),
-    ];
-    const transaction = await findPaymentTransactionWithRetry(providerIds);
-    if (!transaction) {
-      console.warn('[Mercado Pago Webhook] Transacao nao encontrada para ids:', providerIds.filter(Boolean), 'evento:', eventType);
-      return res.status(200).json({ received: true, processed: false, reason: 'Transacao nao encontrada.' });
-    }
-
-    if (transaction.status === 'paid' && transaction.saleId) {
-      return res.status(200).json({ received: true, processed: true, status: 'already_paid', transactionId: transaction.id });
-    }
-    if (transaction.status === 'processing') {
-      return res.status(200).json({ received: true, processed: true, status: 'already_processing', transactionId: transaction.id });
-    }
-
-    const result = await updatePaymentTransactionFromProvider({
-      transaction,
-      source: 'webhook',
-    });
-
-    console.log('[Mercado Pago Webhook] Processado:', transaction.id, 'status:', result.status, 'saleId:', result.saleId || 'pendente');
-    res.status(200).json({
-      received: true,
-      processed: true,
-      transactionId: transaction.id,
-      status: result.status,
-      saleId: result.saleId || null,
-    });
-  } catch (err) {
-    console.error('[Mercado Pago Webhook Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
-    res.status(500).json({ received: false, error: err.message });
   }
 });
 
@@ -2478,6 +2392,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', env: NODE_ENV, timestamp: new Date().toISOString() });
 });
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Rota da API nao encontrada.' });
+});
+
 let lastScheduledMinute = '';
 setInterval(() => {
   const now = new Date();
@@ -2506,7 +2424,7 @@ if (NODE_ENV === 'production') {
 }
 
 app.listen(PORT, HOST, () => {
-  console.log(`[Payments] Webhook ativo | Polling ${PAYMENT_POLLING_ENABLED ? `a cada ${PAYMENT_POLLING_INTERVAL_MS}ms` : 'desativado'}`);
+  console.log(`[Payments] Confirmacao por polling a cada ${PAYMENT_POLLING_INTERVAL_MS}ms`);
   console.log(`🚀 Servidor rodando em http://${HOST}:${PORT} [${NODE_ENV}]`);
 });
 

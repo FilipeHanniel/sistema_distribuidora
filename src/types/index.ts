@@ -145,7 +145,7 @@ export interface PaymentConfirmation {
   createdAt: string;
   providerStatus?: string | null;
   providerStatusDetail?: string | null;
-  confirmationSource: 'polling' | 'webhook' | 'provider' | 'simulated';
+  confirmationSource: 'polling' | 'provider' | 'simulated';
 }
 
 export interface AppNotification {

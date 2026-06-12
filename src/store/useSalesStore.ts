@@ -92,8 +92,8 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       if (transaction.status === 'paid' && transaction.saleId) {
         get().fetchSales();
         useInventoryStore.getState().fetchProducts();
-        const items = get().pendingPixItems[transactionId] || [];
-        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix', items, transaction.fiscalDocument || null);
+        const items = get().pendingPixItems[transactionId];
+        if (items) get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix', items, transaction.fiscalDocument || null);
         set(state => {
           const next = { ...state.pendingPixItems };
           delete next[transactionId];
@@ -112,11 +112,19 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       const transaction = await apiRequest<PixTransaction>(`/payments/pix/${transactionId}/cancel`, {
         method: 'POST',
       });
-      set(state => {
-        const next = { ...state.pendingPixItems };
-        delete next[transactionId];
-        return { pendingPixItems: next };
-      });
+      if (transaction.status === 'paid' && transaction.saleId) {
+        get().fetchSales();
+        useInventoryStore.getState().fetchProducts();
+        const items = get().pendingPixItems[transactionId];
+        if (items) get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'pix', items, transaction.fiscalDocument || null);
+      }
+      if (transaction.status !== 'pending') {
+        set(state => {
+          const next = { ...state.pendingPixItems };
+          delete next[transactionId];
+          return { pendingPixItems: next };
+        });
+      }
       return transaction;
     } catch (err) {
       console.error('Falha ao cancelar Pix:', err);
@@ -146,8 +154,8 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       if (transaction.status === 'paid' && transaction.saleId) {
         get().fetchSales();
         useInventoryStore.getState().fetchProducts();
-        const items = get().pendingPixItems[transactionId] || [];
-        get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'card', items, transaction.fiscalDocument || null);
+        const items = get().pendingPixItems[transactionId];
+        if (items) get().triggerSuccessPopup(transaction.saleId, transaction.amount, 'card', items, transaction.fiscalDocument || null);
         set(state => {
           const next = { ...state.pendingPixItems };
           delete next[transactionId];
