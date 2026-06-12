@@ -419,8 +419,8 @@ const validateMercadoPagoWebhookSignature = (req) => {
   if (!MERCADO_PAGO_WEBHOOK_SECRET) return true;
   const signatureHeader = req.headers['x-signature'];
   const requestId = req.headers['x-request-id'];
-  const providerId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
-  if (!signatureHeader || !requestId || !providerId) return false;
+  const providerIdFromUrl = req.query['data.id'];
+  if (!signatureHeader) return false;
 
   const parts = String(signatureHeader).split(',').reduce((acc, part) => {
     const [key, value] = part.split('=').map(v => v.trim());
@@ -429,7 +429,12 @@ const validateMercadoPagoWebhookSignature = (req) => {
   }, {});
   if (!parts.ts || !parts.v1) return false;
 
-  const manifest = `id:${String(providerId).toLowerCase()};request-id:${requestId};ts:${parts.ts};`;
+  const manifestParts = [];
+  if (providerIdFromUrl) manifestParts.push(`id:${String(providerIdFromUrl).toLowerCase()};`);
+  if (requestId) manifestParts.push(`request-id:${requestId};`);
+  manifestParts.push(`ts:${parts.ts};`);
+  const manifest = manifestParts.join('');
+
   const expected = crypto
     .createHmac('sha256', MERCADO_PAGO_WEBHOOK_SECRET)
     .update(manifest)
@@ -443,6 +448,10 @@ const validateMercadoPagoWebhookSignature = (req) => {
       secretLength: MERCADO_PAGO_WEBHOOK_SECRET.length,
       secretFingerprint: crypto.createHash('sha256').update(MERCADO_PAGO_WEBHOOK_SECRET).digest('hex').slice(0, 12),
       timestamp: parts.ts,
+      originalUrl: req.originalUrl,
+      queryDataId: providerIdFromUrl || null,
+      bodyDataId: req.body?.data?.id || req.body?.id || null,
+      hasRequestId: Boolean(requestId),
       expectedSignature: expected,
       receivedSignature: String(parts.v1),
     });
