@@ -24,6 +24,7 @@ Objetivo: deixar Pix e cartao preparados para uso real por estabelecimento.
 - Consolidar tela de Recebimentos.
 - Melhorar edicao de contas e ocultacao de contas inativas.
 - Mercado Pago Pix em ambiente de teste confirmado por polling. [docs/pagamentos-pix.md](pagamentos-pix.md)
+- Mercado Pago Point preparado para credito, debito, parcelas, cancelamento e simulacao oficial de teste. [docs/pagamentos-cartao-point.md](pagamentos-cartao-point.md)
 - Registrar confirmacao do provedor e canal de consulta no comprovante.
 - Validar webhook Mercado Pago somente em ambiente de producao controlado.
 - Criar painel de transacoes de pagamento. Concluido em 14/06/2026.

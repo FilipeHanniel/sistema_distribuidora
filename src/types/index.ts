@@ -78,6 +78,8 @@ export interface PixAccount {
   terminalId?: string;
   storeId?: string;
   posId?: string;
+  defaultType?: 'credit_card' | 'debit_card';
+  defaultInstallments?: number;
   mpEnvironment?: string;
   payerEmail?: string;
   statementDescriptor?: string;
@@ -128,7 +130,14 @@ export interface CardTransaction {
   amount: number;
   provider?: string;
   providerTransactionId?: string;
+  providerPaymentId?: string | null;
+  externalReference?: string | null;
+  providerStatus?: string | null;
+  providerStatusDetail?: string | null;
   terminalId?: string;
+  paymentType?: 'credit_card' | 'debit_card';
+  installments?: number;
+  isTest?: boolean;
   expiresAt?: string;
   paymentConfirmation?: PaymentConfirmation | null;
 }

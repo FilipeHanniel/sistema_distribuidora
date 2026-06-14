@@ -149,6 +149,8 @@ export default function PixSettings() {
       terminalId: account.terminalId || '',
       storeId: account.storeId || '',
       posId: account.posId || '',
+      defaultType: account.defaultType || 'credit_card',
+      defaultInstallments: String(account.defaultInstallments || 1),
       active: Boolean(account.active),
       isDefault: Boolean(account.isDefault),
     });

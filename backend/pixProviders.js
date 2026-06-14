@@ -76,9 +76,44 @@ const normalizePointStatus = (provider, status, payments = []) => {
   const raw = String(status || '').toLowerCase();
   const paymentStatus = String(payments?.[0]?.status || '').toLowerCase();
   if (['processed', 'paid', 'approved', 'accredited'].includes(raw) || ['processed', 'paid', 'approved', 'accredited'].includes(paymentStatus)) return 'paid';
-  if (['canceled', 'cancelled', 'failed', 'rejected'].includes(raw) || ['canceled', 'cancelled', 'failed', 'rejected'].includes(paymentStatus)) return 'cancelled';
+  if (['canceled', 'cancelled', 'failed', 'rejected', 'refunded'].includes(raw) || ['canceled', 'cancelled', 'failed', 'rejected', 'refunded'].includes(paymentStatus)) return 'cancelled';
   if (raw === 'expired' || paymentStatus === 'expired') return 'expired';
   return 'pending';
+};
+
+const normalizePointPaymentSelection = (paymentType, installments) => {
+  const type = paymentType === 'debit_card' ? 'debit_card' : 'credit_card';
+  const parsedInstallments = Math.max(1, Math.min(12, Number.parseInt(String(installments || 1), 10) || 1));
+  return {
+    paymentType: type,
+    installments: type === 'debit_card' ? 1 : parsedInstallments,
+  };
+};
+
+const buildPointSimulationEvent = ({ scenario, paymentType, installments }) => {
+  const selection = normalizePointPaymentSelection(paymentType, installments);
+  if (scenario === 'approved') {
+    return {
+      status: 'processed',
+      payment_method_type: selection.paymentType,
+      ...(selection.paymentType === 'credit_card' ? { installments: selection.installments } : {}),
+      payment_method_id: selection.paymentType === 'debit_card' ? 'debvisa' : 'visa',
+      status_detail: 'accredited',
+    };
+  }
+  if (scenario === 'failed') {
+    return {
+      status: 'failed',
+      payment_method_type: selection.paymentType,
+      ...(selection.paymentType === 'credit_card' ? { installments: selection.installments } : {}),
+      payment_method_id: selection.paymentType === 'debit_card' ? 'debvisa' : 'visa',
+      status_detail: 'insufficient_amount',
+    };
+  }
+  if (['expired', 'action_required', 'canceled'].includes(scenario)) {
+    return { status: scenario };
+  }
+  throw new Error('Cenario de teste Point invalido.');
 };
 
 const readJsonPayload = (value) => {
@@ -161,6 +196,16 @@ async function fetchMercadoPagoJson(url, accessToken, fallbackMessage) {
     throw error;
   }
   return data;
+}
+
+async function readProviderResponse(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
 }
 
 async function createFakePixCharge({ amount, referenceId }) {
@@ -326,12 +371,29 @@ async function getMercadoPagoPixStatus({ transaction, credentials }) {
   };
 }
 
-async function createFakePointOrder({ amount, referenceId }) {
+async function createFakePointOrder({ amount, referenceId, paymentType, installments }) {
+  const selection = normalizePointPaymentSelection(paymentType, installments);
   return {
     providerTransactionId: referenceId,
     providerPaymentId: `fake-pay-${referenceId}`,
     status: 'pending',
-    payload: { terminalId: 'FAKE_POINT', fakeAutoApproveAfterSeconds: 5 },
+    payload: {
+      id: referenceId,
+      status: 'created',
+      terminalId: 'FAKE_POINT',
+      fakeAutoApproveAfterSeconds: 5,
+      transactions: {
+        payments: [{
+          id: `fake-pay-${referenceId}`,
+          amount: Number(amount).toFixed(2),
+          status: 'pending',
+          payment_method: {
+            type: selection.paymentType,
+            installments: selection.installments,
+          },
+        }],
+      },
+    },
     expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
   };
 }
@@ -341,15 +403,27 @@ async function getFakePointStatus({ transaction }) {
   return {
     status: ageMs >= 5000 ? 'paid' : 'pending',
     paidAt: ageMs >= 5000 ? new Date().toISOString() : null,
-    payload: { fakeElapsedMs: ageMs },
+    providerPaymentId: `fake-pay-${transaction.providerTransactionId}`,
+    payload: { status: ageMs >= 5000 ? 'processed' : 'at_terminal', fakeElapsedMs: ageMs },
   };
 }
 
-async function createMercadoPagoPointOrder({ amount, referenceId, credentials, description }) {
+async function cancelFakePointOrder() {
+  return {
+    status: 'cancelled',
+    payload: { status: 'canceled', cancelledAt: new Date().toISOString() },
+  };
+}
+
+async function createMercadoPagoPointOrder({ amount, referenceId, credentials, description, paymentType, installments }) {
   const accessToken = getCredential(credentials, 'accessToken');
   const terminalId = getCredential(credentials, 'terminalId');
   if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
   if (!terminalId) throw new Error('Terminal ID do Mercado Pago Point nao configurado.');
+  const selection = normalizePointPaymentSelection(
+    paymentType || credentials.defaultType,
+    installments || credentials.defaultInstallments
+  );
 
   const response = await fetch('https://api.mercadopago.com/v1/orders', {
     method: 'POST',
@@ -371,8 +445,8 @@ async function createMercadoPagoPointOrder({ amount, referenceId, credentials, d
           print_on_terminal: credentials.printOnTerminal || 'no_ticket',
         },
         payment_method: {
-          default_type: credentials.defaultType || 'credit_card',
-          default_installments: Number(credentials.defaultInstallments || 1),
+          default_type: selection.paymentType,
+          default_installments: selection.installments,
           installments_cost: credentials.installmentsCost || 'seller',
         },
       },
@@ -392,6 +466,7 @@ async function createMercadoPagoPointOrder({ amount, referenceId, credentials, d
   return {
     providerTransactionId: String(data.id),
     providerPaymentId: payments[0]?.id ? String(payments[0].id) : null,
+    externalReference: data.external_reference || referenceId,
     status: normalizePointStatus('mercado_pago', data.status, payments),
     payload: data,
     expiresAt: null,
@@ -420,6 +495,77 @@ async function getMercadoPagoPointStatus({ transaction, credentials }) {
   return {
     status: normalizePointStatus('mercado_pago', data.status, payments),
     paidAt: ['processed', 'paid'].includes(String(data.status || '').toLowerCase()) ? new Date().toISOString() : null,
+    providerPaymentId: payments[0]?.id ? String(payments[0].id) : null,
+    externalReference: data.external_reference || null,
+    payload: data,
+  };
+}
+
+async function sendMercadoPagoPointEvent({ transaction, credentials, event }) {
+  const accessToken = getCredential(credentials, 'accessToken');
+  if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
+  if (!transaction.providerTransactionId) throw new Error('Order Point ainda sem identificador no Mercado Pago.');
+
+  const response = await fetch(`https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}/events`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(event),
+  });
+  const data = await readProviderResponse(response);
+  if (!response.ok) {
+    const error = new Error(stringifyProviderError(data, 'Erro ao simular status da order Point no Mercado Pago.'));
+    error.providerPayload = data;
+    error.providerStatus = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function simulateMercadoPagoPointStatus({ transaction, credentials, scenario, paymentType, installments }) {
+  const event = buildPointSimulationEvent({ scenario, paymentType, installments });
+  const data = await sendMercadoPagoPointEvent({ transaction, credentials, event });
+  return {
+    status: 'pending',
+    payload: { event, response: data, requestedAt: new Date().toISOString() },
+  };
+}
+
+async function cancelMercadoPagoPointOrder({ transaction, credentials }) {
+  if (credentials.mpEnvironment !== 'production') {
+    const result = await simulateMercadoPagoPointStatus({
+      transaction,
+      credentials,
+      scenario: 'canceled',
+    });
+    return { ...result, status: 'cancelled' };
+  }
+
+  const accessToken = getCredential(credentials, 'accessToken');
+  if (!accessToken) throw new Error('Access token do Mercado Pago nao configurado.');
+  if (!transaction.providerTransactionId) {
+    return { status: 'cancelled', payload: { localOnly: true, reason: 'Order Point ainda sem identificador remoto.' } };
+  }
+
+  const response = await fetch(`https://api.mercadopago.com/v1/orders/${transaction.providerTransactionId}/cancel`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': `cancel-point-${transaction.id}`,
+    },
+  });
+  const data = await readProviderResponse(response);
+  if (!response.ok) {
+    const error = new Error(stringifyProviderError(data, 'Nao foi possivel cancelar a order Point. Se ela ja estiver no terminal, cancele pela maquininha.'));
+    error.providerPayload = data;
+    error.providerStatus = response.status;
+    throw error;
+  }
+  return {
+    status: normalizePointStatus('mercado_pago', data.status || 'canceled', data.transactions?.payments || []),
     payload: data,
   };
 }
@@ -479,13 +625,18 @@ function getPixProvider(provider) {
 
 function getPointProvider(provider) {
   if (provider === 'fake') {
-    return { createOrder: createFakePointOrder, getStatus: getFakePointStatus };
+    return { createOrder: createFakePointOrder, getStatus: getFakePointStatus, cancelOrder: cancelFakePointOrder };
   }
   if (provider === 'mercado_pago') {
-    return { createOrder: createMercadoPagoPointOrder, getStatus: getMercadoPagoPointStatus };
+    return {
+      createOrder: createMercadoPagoPointOrder,
+      getStatus: getMercadoPagoPointStatus,
+      cancelOrder: cancelMercadoPagoPointOrder,
+      simulateStatus: simulateMercadoPagoPointStatus,
+    };
   }
   if (provider === 'mercado_pago_fake') {
-    return { createOrder: createFakePointOrder, getStatus: getFakePointStatus };
+    return { createOrder: createFakePointOrder, getStatus: getFakePointStatus, cancelOrder: cancelFakePointOrder };
   }
   throw new Error('Provider Point ainda nao implementado.');
 }
@@ -501,5 +652,7 @@ module.exports = {
   makeProviderReference,
   normalizeStatus,
   normalizePointStatus,
+  normalizePointPaymentSelection,
+  buildPointSimulationEvent,
   buildMercadoPagoIdentification,
 };

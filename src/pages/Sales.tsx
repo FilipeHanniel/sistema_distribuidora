@@ -35,6 +35,10 @@ export default function Sales() {
   const [pixCancelling, setPixCancelling] = useState(false);
   const [cardTransaction, setCardTransaction] = useState<CardTransaction | null>(null);
   const [cardWaiting, setCardWaiting] = useState(false);
+  const [cardCancelling, setCardCancelling] = useState(false);
+  const [cardSimulating, setCardSimulating] = useState(false);
+  const [cardPaymentType, setCardPaymentType] = useState<'credit_card' | 'debit_card'>('credit_card');
+  const [cardInstallments, setCardInstallments] = useState(1);
   const [checkoutProcessing, setCheckoutProcessing] = useState(false);
   const [paymentConfig, setPaymentConfig] = useState<PaymentRuntimeConfig>({
     strategy: 'polling',
@@ -45,7 +49,16 @@ export default function Sales() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { products, addProduct } = useInventoryStore();
-  const { addSale, createPixPayment, checkPixPayment, cancelPixPayment, createCardPayment, checkCardPayment } = useSalesStore();
+  const {
+    addSale,
+    createPixPayment,
+    checkPixPayment,
+    cancelPixPayment,
+    createCardPayment,
+    checkCardPayment,
+    cancelCardPayment,
+    simulateCardPayment,
+  } = useSalesStore();
 
   useEffect(() => {
     const mpWindow = window as unknown as {
@@ -105,6 +118,14 @@ export default function Sales() {
   const cartItemCount = useMemo(() => cart.reduce((total, item) => total + item.quantity, 0), [cart]);
   const availablePixAccounts = useMemo(() => pixAccounts.filter(a => a.supportsPix !== false), [pixAccounts]);
   const availableCardAccounts = useMemo(() => pixAccounts.filter(a => a.supportsPoint), [pixAccounts]);
+
+  useEffect(() => {
+    const account = availableCardAccounts.find(item => item.id === selectedCardAccountId);
+    if (!account) return;
+    const type = account.defaultType === 'debit_card' ? 'debit_card' : 'credit_card';
+    setCardPaymentType(type);
+    setCardInstallments(type === 'debit_card' ? 1 : Math.max(1, Math.min(12, Number(account.defaultInstallments || 1))));
+  }, [availableCardAccounts, selectedCardAccountId]);
 
   const addToCart = (product: Product) => {
     if (product.stock <= 0) return;
@@ -195,7 +216,13 @@ export default function Sales() {
         return;
       }
       if (paymentMethod === 'card' && selectedCardAccountId) {
-        const transaction = await createCardPayment(cart, cartTotal, selectedCardAccountId);
+        const transaction = await createCardPayment(
+          cart,
+          cartTotal,
+          selectedCardAccountId,
+          cardPaymentType,
+          cardPaymentType === 'debit_card' ? 1 : cardInstallments
+        );
         if (transaction) {
           setCardTransaction(transaction);
           setCardWaiting(true);
@@ -216,6 +243,41 @@ export default function Sales() {
     } finally {
       setCheckoutProcessing(false);
     }
+  };
+
+  const handleCloseCardModal = async () => {
+    if (!cardTransaction) return;
+    if (cardTransaction.status === 'paid') {
+      setCardTransaction(null);
+      return;
+    }
+    if (!cardWaiting || cardTransaction.status !== 'pending') {
+      setCardWaiting(false);
+      setCardTransaction(null);
+      setCheckoutProcessing(false);
+      return;
+    }
+
+    const shouldCancel = window.confirm('Cancelar o pagamento enviado ao terminal? A venda nao sera registrada.');
+    if (!shouldCancel) return;
+    setCardCancelling(true);
+    const cancelled = await cancelCardPayment(cardTransaction.id);
+    setCardCancelling(false);
+    if (!cancelled) return;
+    setCardTransaction(cancelled);
+    if (cancelled.status === 'pending') return;
+    setCardWaiting(false);
+    setCheckoutProcessing(false);
+    setCardTransaction(null);
+    barcodeRef.current?.focus();
+  };
+
+  const handleCardSimulation = async (scenario: 'approved' | 'failed' | 'expired' | 'action_required') => {
+    if (!cardTransaction || cardSimulating) return;
+    setCardSimulating(true);
+    const updated = await simulateCardPayment(cardTransaction.id, scenario);
+    setCardSimulating(false);
+    if (updated) setCardTransaction(updated);
   };
 
   const handleClosePixModal = async () => {
@@ -503,20 +565,50 @@ export default function Sales() {
                   </div>
                 )}
                 {paymentMethod === 'card' && availableCardAccounts.length > 0 && (
-                  <div className="pix-account-select">
-                    <label>Terminal de cartão</label>
-                    <select value={selectedCardAccountId} onChange={e => setSelectedCardAccountId(e.target.value)}>
-                      {availableCardAccounts.map(account => (
-                        <option key={account.id} value={account.id}>
-                          {account.name}{account.terminalId ? ` - ${account.terminalId}` : ''}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="card-payment-config">
+                    <div className="pix-account-select">
+                      <label>Terminal de cartão</label>
+                      <select value={selectedCardAccountId} onChange={e => setSelectedCardAccountId(e.target.value)}>
+                        {availableCardAccounts.map(account => (
+                          <option key={account.id} value={account.id}>
+                            {account.name}{account.terminalId ? ` - ${account.terminalId}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="card-payment-options">
+                      <label>
+                        Modalidade
+                        <select
+                          value={cardPaymentType}
+                          onChange={e => {
+                            const type = e.target.value as 'credit_card' | 'debit_card';
+                            setCardPaymentType(type);
+                            if (type === 'debit_card') setCardInstallments(1);
+                          }}
+                        >
+                          <option value="credit_card">Crédito</option>
+                          <option value="debit_card">Débito</option>
+                        </select>
+                      </label>
+                      <label>
+                        Parcelas
+                        <select
+                          value={cardInstallments}
+                          disabled={cardPaymentType === 'debit_card'}
+                          onChange={e => setCardInstallments(Number(e.target.value))}
+                        >
+                          {Array.from({ length: 12 }, (_, index) => index + 1).map(value => (
+                            <option key={value} value={value}>{value}x</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   </div>
                 )}
                 {paymentMethod === 'card' && availableCardAccounts.length === 0 && (
                   <div className="card-terminal-note">
-                    Sem terminal integrado. A venda em cartao sera registrada diretamente para teste.
+                    Cadastre uma conta com terminal Mercado Pago Point para receber por cartão.
                   </div>
                 )}
               </div>
@@ -529,7 +621,7 @@ export default function Sales() {
 
             <button
               className="btn-checkout"
-              disabled={cart.length === 0 || checkoutProcessing || pixWaiting || cardWaiting || (paymentMethod === 'pix' && !selectedPixAccountId)}
+              disabled={cart.length === 0 || checkoutProcessing || pixWaiting || cardWaiting || (paymentMethod === 'pix' && !selectedPixAccountId) || (paymentMethod === 'card' && !selectedCardAccountId)}
               onClick={handleCheckout}
             >
               <CheckCircle size={20} />
@@ -612,15 +704,51 @@ export default function Sales() {
         )}
       </Modal>
 
-      <Modal isOpen={!!cardTransaction} onClose={() => !cardWaiting && setCardTransaction(null)} title="Pagamento no terminal">
+      <Modal isOpen={!!cardTransaction} onClose={handleCloseCardModal} title="Pagamento no terminal">
         {cardTransaction && (
           <div className="pix-payment-modal">
             <div className="pix-payment-status">
               <CreditCard size={22} />
               <div>
-                <strong>{cardTransaction.status === 'paid' ? 'Pagamento confirmado' : 'Aguardando terminal'}</strong>
+                <strong>
+                  {cardTransaction.status === 'paid'
+                    ? 'Pagamento confirmado'
+                    : cardTransaction.status === 'cancelled'
+                      ? 'Pagamento recusado ou cancelado'
+                      : cardTransaction.status === 'expired'
+                        ? 'Pagamento expirado'
+                        : cardTransaction.providerStatus === 'action_required'
+                          ? 'Ação necessária no terminal'
+                          : 'Aguardando terminal'}
+                </strong>
                 <span>{formatCurrency(cardTransaction.amount)}</span>
               </div>
+            </div>
+
+            <div className="pix-provider-identifiers">
+              <label>Transação Point</label>
+              <div>
+                <span>Modalidade</span>
+                <strong>{cardTransaction.paymentType === 'debit_card' ? 'Débito' : `Crédito ${cardTransaction.installments || 1}x`}</strong>
+              </div>
+              {cardTransaction.providerTransactionId && (
+                <div>
+                  <span>Pedido</span>
+                  <strong>{cardTransaction.providerTransactionId}</strong>
+                </div>
+              )}
+              {cardTransaction.providerPaymentId && (
+                <div>
+                  <span>Pagamento</span>
+                  <strong>{cardTransaction.providerPaymentId}</strong>
+                </div>
+              )}
+              {cardTransaction.providerStatus && (
+                <div>
+                  <span>Status Point</span>
+                  <strong>{cardTransaction.providerStatus}{cardTransaction.providerStatusDetail ? ` / ${cardTransaction.providerStatusDetail}` : ''}</strong>
+                </div>
+              )}
             </div>
 
             <div className="pix-qr-placeholder">
@@ -628,9 +756,24 @@ export default function Sales() {
               <span>{cardTransaction.terminalId ? `Venda enviada para ${cardTransaction.terminalId}` : 'Venda enviada para o terminal'}</span>
             </div>
 
+            {cardTransaction.isTest && cardWaiting && (
+              <div className="point-test-panel">
+                <strong>Simulação oficial Mercado Pago Point</strong>
+                <span>Escolha o resultado que o ambiente de teste deve devolver. A atualização pode levar até 10 segundos.</span>
+                <div>
+                  <button className="btn btn-primary" disabled={cardSimulating} onClick={() => handleCardSimulation('approved')}>Aprovar</button>
+                  <button className="btn btn-secondary" disabled={cardSimulating} onClick={() => handleCardSimulation('failed')}>Recusar</button>
+                  <button className="btn btn-secondary" disabled={cardSimulating} onClick={() => handleCardSimulation('action_required')}>Exigir ação</button>
+                  <button className="btn btn-secondary" disabled={cardSimulating} onClick={() => handleCardSimulation('expired')}>Expirar</button>
+                </div>
+              </div>
+            )}
+
             <div className="pix-waiting-note">
-              {cardWaiting
-                ? `Consulta automatica a cada ${Math.round(paymentConfig.pollingIntervalMs / 1000)} segundos.`
+              {cardCancelling
+                ? 'Cancelando a transação no terminal...'
+                : cardWaiting
+                ? `Consulta automática a cada ${Math.round(paymentConfig.pollingIntervalMs / 1000)} segundos. Clique no X para cancelar.`
                 : 'A transacao nao esta mais em consulta automatica.'}
             </div>
           </div>

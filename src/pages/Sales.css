@@ -551,6 +551,40 @@
   margin-top: 0.75rem;
 }
 
+.card-payment-config {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.card-payment-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.card-payment-options label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.card-payment-options select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 0.65rem 0.75rem;
+}
+
+.card-payment-options select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .pix-account-select label {
   display: block;
   font-size: 0.72rem;
@@ -631,6 +665,37 @@
   grid-template-columns: 6.5rem minmax(0, 1fr);
   gap: 0.5rem;
   align-items: center;
+}
+
+.point-test-panel {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border: 1px solid #f59e0b;
+  border-radius: 0.5rem;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.point-test-panel span {
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.point-test-panel div {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.point-test-panel .btn {
+  min-height: 2.2rem;
+}
+
+@media (max-width: 520px) {
+  .card-payment-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pix-provider-identifiers span {

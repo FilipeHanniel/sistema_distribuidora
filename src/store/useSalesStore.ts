@@ -25,8 +25,16 @@ interface SalesState {
   createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string, deviceId?: string) => Promise<PixTransaction | undefined>;
   checkPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
   cancelPixPayment: (transactionId: string) => Promise<PixTransaction | undefined>;
-  createCardPayment: (items: SaleItem[], totalAmount: number, accountId?: string) => Promise<CardTransaction | undefined>;
+  createCardPayment: (
+    items: SaleItem[],
+    totalAmount: number,
+    accountId: string | undefined,
+    paymentType: 'credit_card' | 'debit_card',
+    installments: number
+  ) => Promise<CardTransaction | undefined>;
   checkCardPayment: (transactionId: string) => Promise<CardTransaction | undefined>;
+  cancelCardPayment: (transactionId: string) => Promise<CardTransaction | undefined>;
+  simulateCardPayment: (transactionId: string, scenario: 'approved' | 'failed' | 'expired' | 'action_required') => Promise<CardTransaction | undefined>;
   getSalesByDateRange: (startDate: Date, endDate: Date) => Sale[];
   triggerSuccessPopup: (id: string, amount: number, method: PaymentMethod, items: SaleItem[], fiscalDocument?: FiscalDocument | null) => void;
   closeSuccessPopup: () => void;
@@ -140,11 +148,11 @@ export const useSalesStore = create<SalesState>((set, get) => ({
     }
   },
 
-  createCardPayment: async (items, totalAmount, accountId) => {
+  createCardPayment: async (items, totalAmount, accountId, paymentType, installments) => {
     try {
       const transaction = await apiRequest<CardTransaction>('/payments/card', {
         method: 'POST',
-        body: { items, totalAmount, accountId },
+        body: { items, totalAmount, accountId, paymentType, installments },
       });
       set(state => ({ pendingPixItems: { ...state.pendingPixItems, [transaction.id]: items } }));
       return transaction;
@@ -172,6 +180,39 @@ export const useSalesStore = create<SalesState>((set, get) => ({
       return transaction;
     } catch (err) {
       console.error('Falha ao consultar terminal:', err);
+      return undefined;
+    }
+  },
+
+  cancelCardPayment: async (transactionId) => {
+    try {
+      const transaction = await apiRequest<CardTransaction>(`/payments/card/${transactionId}/cancel`, {
+        method: 'POST',
+      });
+      if (transaction.status !== 'pending') {
+        set(state => {
+          const next = { ...state.pendingPixItems };
+          delete next[transactionId];
+          return { pendingPixItems: next };
+        });
+      }
+      return transaction;
+    } catch (err) {
+      console.error('Falha ao cancelar pagamento no terminal:', err);
+      alert(getApiErrorMessage(err, 'Erro ao cancelar pagamento no terminal'));
+      return undefined;
+    }
+  },
+
+  simulateCardPayment: async (transactionId, scenario) => {
+    try {
+      return await apiRequest<CardTransaction>(`/payments/card/${transactionId}/simulate`, {
+        method: 'POST',
+        body: { scenario },
+      });
+    } catch (err) {
+      console.error('Falha ao simular pagamento Point:', err);
+      alert(getApiErrorMessage(err, 'Erro ao simular pagamento Point'));
       return undefined;
     }
   },

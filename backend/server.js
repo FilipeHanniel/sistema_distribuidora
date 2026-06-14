@@ -7,7 +7,13 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { PROVIDERS, getPixProvider, getPointProvider, makeProviderReference } = require('./pixProviders');
+const {
+  PROVIDERS,
+  getPixProvider,
+  getPointProvider,
+  makeProviderReference,
+  normalizePointPaymentSelection,
+} = require('./pixProviders');
 const { getFiscalProvider } = require('./fiscalProviders');
 const { getPaymentTransactionIssue } = require('./paymentReconciliation');
 const {
@@ -254,6 +260,8 @@ const sanitizePixAccount = (account) => {
     terminalId: credentials.terminalId || '',
     storeId: credentials.storeId || '',
     posId: credentials.posId || '',
+    defaultType: credentials.defaultType || 'credit_card',
+    defaultInstallments: Number(credentials.defaultInstallments || 1),
     active: account.active,
     isDefault: account.isDefault,
     createdAt: account.createdAt,
@@ -474,6 +482,8 @@ const refreshCardTransactionFromProvider = async ({ transaction, userId = null }
   const currentPayload = parseTransactionPayload(transaction);
   const nextPayload = {
     ...currentPayload,
+    providerPaymentId: statusResult.providerPaymentId || currentPayload.providerPaymentId || null,
+    externalReference: statusResult.externalReference || currentPayload.externalReference || null,
     latestProviderPayload: statusResult.payload || null,
     confirmationSource: statusResult.status === 'paid' ? 'polling' : currentPayload.confirmationSource,
   };
@@ -494,6 +504,41 @@ const refreshCardTransactionFromProvider = async ({ transaction, userId = null }
     latest = await finalizePaidTransaction({ transactionId: latest.id, userId });
   }
   return latest;
+};
+
+const buildCardTransactionResponse = (transaction, estId) => {
+  const payload = parseTransactionPayload(transaction);
+  const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
+  const payment = providerPayload.transactions?.payments?.[0] || {};
+  const paymentMethod = payment.payment_method || {};
+  const account = db.prepare('SELECT provider, credentials FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+    .get(transaction.pixAccountId, estId);
+  const credentials = decodeCredentials(account?.credentials);
+  const fiscalDocument = transaction.saleId
+    ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(transaction.saleId, estId) || null
+    : null;
+
+  return {
+    id: transaction.id,
+    status: transaction.status === 'processing' ? 'pending' : transaction.status,
+    saleId: transaction.saleId,
+    fiscalDocument,
+    paidAt: transaction.paidAt,
+    amount: transaction.amount,
+    provider: transaction.provider,
+    providerTransactionId: transaction.providerTransactionId,
+    providerPaymentId: payload.providerPaymentId || payment.id || null,
+    externalReference: payload.externalReference || providerPayload.external_reference || null,
+    providerStatus: providerPayload.status || payment.status || null,
+    providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
+    terminalId: credentials.terminalId || '',
+    paymentType: payload.paymentType || paymentMethod.type || credentials.defaultType || 'credit_card',
+    installments: Number(payload.installments || paymentMethod.installments || credentials.defaultInstallments || 1),
+    isTest: transaction.provider === 'mercado_pago' && credentials.mpEnvironment !== 'production',
+    expiresAt: transaction.expiresAt,
+    paymentConfirmation: transaction.saleId ? getPaymentTransactionForSale(transaction.saleId, estId) : null,
+  };
 };
 
 const sanitizeFiscalSettings = (settings) => {
@@ -2017,7 +2062,7 @@ app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor
 app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res) => {
   let transactionId = null;
   try {
-    const { items, totalAmount, accountId } = req.body;
+    const { items, totalAmount, accountId, paymentType, installments } = req.body;
     const estId = req.user.establishmentId;
     const preparedSale = validateSaleItemsForTenant(items, estId, { expectedTotal: totalAmount, useCurrentPrices: true });
 
@@ -2033,6 +2078,10 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
     if (!PROVIDERS[account.provider]?.supportsPoint) {
       return res.status(400).json({ error: 'Provider sem suporte a terminal/Point.' });
     }
+    const paymentSelection = normalizePointPaymentSelection(
+      paymentType || credentials.defaultType,
+      installments || credentials.defaultInstallments
+    );
 
     transactionId = uuidv4();
     const referenceId = makeProviderReference();
@@ -2049,7 +2098,12 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       account.id,
       account.provider,
       preparedSale.totalAmount,
-      JSON.stringify({ items: preparedSale.items, externalReference: referenceId }),
+      JSON.stringify({
+        items: preparedSale.items,
+        externalReference: referenceId,
+        paymentType: paymentSelection.paymentType,
+        installments: paymentSelection.installments,
+      }),
       createdAt,
       createdAt
     );
@@ -2059,6 +2113,8 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       referenceId,
       credentials,
       description: `Venda PDV ${transactionId}`,
+      paymentType: paymentSelection.paymentType,
+      installments: paymentSelection.installments,
     });
 
     db.prepare(`
@@ -2071,7 +2127,9 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       JSON.stringify({
         items: preparedSale.items,
         providerPaymentId: order.providerPaymentId || null,
-        externalReference: referenceId,
+        externalReference: order.externalReference || referenceId,
+        paymentType: paymentSelection.paymentType,
+        installments: paymentSelection.installments,
         providerPayload: order.payload || null,
       }),
       order.expiresAt || null,
@@ -2079,15 +2137,8 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       transactionId
     );
 
-    res.status(201).json({
-      id: transactionId,
-      status: order.status,
-      amount: preparedSale.totalAmount,
-      provider: account.provider,
-      providerTransactionId: order.providerTransactionId,
-      terminalId: credentials.terminalId || '',
-      expiresAt: order.expiresAt || null,
-    });
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(transactionId, estId);
+    res.status(201).json(buildCardTransactionResponse(transaction, estId));
   } catch (err) {
     if (transactionId) {
       db.prepare(`
@@ -2114,23 +2165,7 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
       transaction = await finalizePaidTransaction({ transactionId: transaction.id, userId: req.user.id });
     }
 
-    const responseStatus = transaction.status === 'processing' ? 'pending' : transaction.status;
-    const fiscalDocument = transaction.saleId
-      ? db.prepare('SELECT * FROM fiscal_documents WHERE saleId = ? AND establishmentId = ? ORDER BY createdAt DESC LIMIT 1').get(transaction.saleId, estId) || null
-      : null;
-
-    res.json({
-      id: transaction.id,
-      status: responseStatus,
-      saleId: transaction.saleId,
-      fiscalDocument,
-      paidAt: transaction.paidAt,
-      amount: transaction.amount,
-      provider: transaction.provider,
-      providerTransactionId: transaction.providerTransactionId,
-      paymentConfirmation: transaction.saleId ? getPaymentTransactionForSale(transaction.saleId, estId) : null,
-      expiresAt: transaction.expiresAt,
-    });
+    res.json(buildCardTransactionResponse(transaction, estId));
   } catch (err) {
     db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
       .run(err.message, new Date().toISOString(), req.params.id, req.user.establishmentId);
@@ -2265,6 +2300,99 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
   } catch (err) {
     console.error('[Pix Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
+      .get(req.params.id, estId, 'card');
+    if (!transaction) return res.status(404).json({ error: 'Transacao de cartao nao encontrada.' });
+    if (transaction.status === 'paid' || transaction.saleId) {
+      return res.status(409).json({ error: 'Nao e possivel cancelar um pagamento de cartao ja confirmado.' });
+    }
+    if (transaction.status !== 'pending') {
+      return res.json(buildCardTransactionResponse(transaction, estId));
+    }
+
+    const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+      .get(transaction.pixAccountId, estId);
+    if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
+
+    const provider = getPointProvider(account.provider);
+    const cancelResult = provider.cancelOrder
+      ? await provider.cancelOrder({ transaction, credentials: decodeCredentials(account.credentials) })
+      : { status: 'cancelled', payload: { localOnly: true } };
+    const currentPayload = parseTransactionPayload(transaction);
+    const nextPayload = {
+      ...currentPayload,
+      latestCancelProviderPayload: cancelResult.payload || null,
+    };
+    db.prepare(`
+      UPDATE payment_transactions
+      SET status = ?, payload = ?, updatedAt = ?, error = NULL
+      WHERE id = ? AND establishmentId = ? AND saleId IS NULL AND status = 'pending'
+    `).run(
+      cancelResult.status === 'paid' ? 'paid' : 'cancelled',
+      JSON.stringify(nextPayload),
+      new Date().toISOString(),
+      transaction.id,
+      estId
+    );
+
+    let latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(transaction.id, estId);
+    if (latest.status === 'paid' && !latest.saleId) {
+      latest = await finalizePaidTransaction({ transactionId: latest.id, userId: req.user.id });
+    }
+    res.json(buildCardTransactionResponse(latest, estId));
+  } catch (err) {
+    console.error('[Card Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(err.providerStatus || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, async (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
+      .get(req.params.id, estId, 'card');
+    if (!transaction) return res.status(404).json({ error: 'Transacao de cartao nao encontrada.' });
+    if (transaction.status !== 'pending') return res.status(409).json({ error: 'Somente transacoes pendentes podem ser simuladas.' });
+
+    const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+      .get(transaction.pixAccountId, estId);
+    if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
+    const credentials = decodeCredentials(account.credentials);
+    if (account.provider !== 'mercado_pago' || credentials.mpEnvironment === 'production') {
+      return res.status(403).json({ error: 'A simulacao Point esta disponivel somente para conta Mercado Pago em ambiente de teste.' });
+    }
+
+    const provider = getPointProvider(account.provider);
+    if (!provider.simulateStatus) return res.status(400).json({ error: 'Provider sem suporte a simulacao Point.' });
+    const currentPayload = parseTransactionPayload(transaction);
+    const simulation = await provider.simulateStatus({
+      transaction,
+      credentials,
+      scenario: req.body?.scenario,
+      paymentType: currentPayload.paymentType,
+      installments: currentPayload.installments,
+    });
+    const nextPayload = {
+      ...currentPayload,
+      latestSimulationRequest: simulation.payload || null,
+    };
+    db.prepare(`
+      UPDATE payment_transactions
+      SET payload = ?, updatedAt = ?, error = NULL
+      WHERE id = ? AND establishmentId = ? AND status = 'pending'
+    `).run(JSON.stringify(nextPayload), new Date().toISOString(), transaction.id, estId);
+
+    const latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(transaction.id, estId);
+    res.json(buildCardTransactionResponse(latest, estId));
+  } catch (err) {
+    console.error('[Card Simulation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(err.providerStatus || 500).json({ error: err.message });
   }
 });
 
