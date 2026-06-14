@@ -346,16 +346,19 @@ export default function PixSettings() {
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Tipo de documento</label>
+                  <label>Tipo de documento do pagador</label>
                   <select className="form-control" value={form.payerIdentificationType} onChange={e => setForm(p => ({ ...p, payerIdentificationType: e.target.value }))}>
                     <option value="CPF">CPF</option>
                     <option value="CNPJ">CNPJ</option>
                   </select>
                 </div>
                 <div className="form-group">
-                  <label>Numero do documento</label>
-                  <input className="form-control" value={form.payerIdentificationNumber} onChange={e => setForm(p => ({ ...p, payerIdentificationNumber: e.target.value }))} placeholder="Somente numeros" />
+                  <label>Numero do documento do pagador</label>
+                  <input className="form-control" inputMode="numeric" value={form.payerIdentificationNumber} onChange={e => setForm(p => ({ ...p, payerIdentificationNumber: e.target.value }))} placeholder="Opcional; somente numeros" />
                 </div>
+              </div>
+              <div className="pix-provider-note">
+                O documento e opcional. Se o numero ficar vazio, nenhuma identificacao sera enviada ao Mercado Pago.
               </div>
               <div className="form-row">
                 <div className="form-group">

@@ -136,6 +136,16 @@ const buildMercadoPagoAddress = (credentials) => compactObject({
   complement: getCredential(credentials, 'payerComplement'),
 });
 
+const buildMercadoPagoIdentification = (credentials) => {
+  const number = onlyDigits(credentials.payerIdentificationNumber);
+  if (!number) return undefined;
+
+  return {
+    type: getCredential(credentials, 'payerIdentificationType') || (number.length === 14 ? 'CNPJ' : 'CPF'),
+    number,
+  };
+};
+
 async function fetchMercadoPagoJson(url, accessToken, fallbackMessage) {
   const response = await fetch(url, {
     headers: {
@@ -191,10 +201,7 @@ async function createMercadoPagoPixCharge({ amount, referenceId, credentials, de
     : (configuredEmail || 'cliente@example.com');
   const statementDescriptor = sanitizeText(credentials.statementDescriptor || credentials.storeName || 'DISTRIBUIDORA', 'DISTRIBUIDORA', 22);
   const payerAddress = buildMercadoPagoAddress(credentials);
-  const payerIdentification = compactObject({
-    type: getCredential(credentials, 'payerIdentificationType'),
-    number: onlyDigits(credentials.payerIdentificationNumber),
-  });
+  const payerIdentification = buildMercadoPagoIdentification(credentials);
   const payerPhone = compactObject({
     area_code: onlyDigits(credentials.payerPhoneAreaCode),
     number: onlyDigits(credentials.payerPhoneNumber),
@@ -494,4 +501,5 @@ module.exports = {
   makeProviderReference,
   normalizeStatus,
   normalizePointStatus,
+  buildMercadoPagoIdentification,
 };
