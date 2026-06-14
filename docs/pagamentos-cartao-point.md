@@ -38,7 +38,7 @@ Cada caixa aceita apenas um terminal em modo PDV. Para integrar outra maquininha
 
 No ambiente de teste, informe no assistente o `User ID` numerico exibido nas credenciais de teste da integracao. Ele identifica a conta recebedora usada para criar a loja.
 
-Ao criar o caixa, selecione a categoria MCC de quatro digitos correspondente ao comercio. Para distribuidoras, mercados e conveniencias, o sistema sugere `5411 - Mercados e supermercados`.
+Ao criar o caixa, selecione a categoria MCC correspondente ao comercio. Para distribuidoras, mercados e conveniencias, o sistema sugere `5411 - Mercados e supermercados`. A API Point tambem utiliza categorias com mais digitos em alguns contextos; a validacao final pertence ao Mercado Pago e depende do pais e da conta recebedora.
 
 ## Testes
 

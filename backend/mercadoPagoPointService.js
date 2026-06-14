@@ -93,7 +93,7 @@ const validateStoreInput = (store = {}) => {
 const validatePosInput = (pos = {}) => {
   if (!String(pos.name || '').trim()) throw new Error('Informe o nome do caixa.');
   const categoryText = String(pos.category || DEFAULT_POINT_MCC).trim();
-  if (!/^\d{4}$/.test(categoryText)) throw new Error('A categoria MCC deve possuir exatamente 4 digitos.');
+  if (!/^\d+$/.test(categoryText) || Number(categoryText) <= 0) throw new Error('Informe uma categoria MCC numerica valida.');
   return {
     name: String(pos.name).trim(),
     externalId: normalizeExternalId(pos.externalId, 'POS', 40),

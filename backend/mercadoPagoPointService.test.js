@@ -71,10 +71,22 @@ test('valida dados do caixa Point', () => {
   });
 });
 
-test('rejeita categoria que nao representa um MCC de quatro digitos', () => {
-  assert.throws(() => validatePosInput({
+test('aceita categoria numerica conforme formato utilizado pela API Point', () => {
+  assert.deepEqual(validatePosInput({
     name: 'Caixa principal',
     externalId: 'POS001',
     category: '621102',
-  }), /4 digitos/);
+  }), {
+    name: 'Caixa principal',
+    externalId: 'POS001',
+    category: 621102,
+  });
+});
+
+test('rejeita categoria MCC nao numerica', () => {
+  assert.throws(() => validatePosInput({
+    name: 'Caixa principal',
+    externalId: 'POS001',
+    category: 'mercado',
+  }), /numerica valida/);
 });
