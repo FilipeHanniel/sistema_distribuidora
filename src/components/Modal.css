@@ -28,6 +28,10 @@
   flex-direction: column;
 }
 
+.modal-content-wide {
+  max-width: 860px;
+}
+
 .modal-header {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);

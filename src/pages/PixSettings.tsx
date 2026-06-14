@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { CreditCard, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle, Pencil } from 'lucide-react';
+import { CreditCard, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle, Pencil, Building2, MonitorSmartphone } from 'lucide-react';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import Modal from '../components/Modal';
-import type { PixAccount, PixProvider } from '../types';
+import type { PixAccount, PixProvider, PointSetupResponse } from '../types';
 import './PixSettings.css';
 
 type ProviderInfo = Record<string, { label: string; implemented: boolean; requires: string[]; supportsPix?: boolean; supportsPoint?: boolean }>;
@@ -16,6 +16,30 @@ const providerLabels: Record<string, string> = {
   itau: 'Itau',
   santander: 'Santander',
   bradesco: 'Bradesco',
+};
+
+const brazilianStates = [
+  'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal',
+  'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul',
+  'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí',
+  'Rio Grande do Norte', 'Rio Grande do Sul', 'Rio de Janeiro', 'Rondônia',
+  'Roraima', 'Santa Catarina', 'Sergipe', 'São Paulo', 'Tocantins',
+];
+
+const emptyPointForm = {
+  userId: '',
+  storeName: 'Loja principal',
+  storeExternalId: '',
+  streetName: '',
+  streetNumber: '',
+  cityName: 'Goiania',
+  stateName: 'Goiás',
+  latitude: '-16.6869',
+  longitude: '-49.2648',
+  reference: '',
+  posName: 'Caixa principal',
+  posExternalId: '',
+  category: '621102',
 };
 
 const emptyForm = {
@@ -59,6 +83,13 @@ export default function PixSettings() {
   const [editingAccount, setEditingAccount] = useState<PixAccount | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
+  const [pointOpen, setPointOpen] = useState(false);
+  const [pointAccount, setPointAccount] = useState<PixAccount | null>(null);
+  const [pointSetup, setPointSetup] = useState<PointSetupResponse | null>(null);
+  const [pointForm, setPointForm] = useState({ ...emptyPointForm });
+  const [pointLoading, setPointLoading] = useState(false);
+  const [pointAction, setPointAction] = useState('');
+  const [pointError, setPointError] = useState('');
 
   const loadData = async () => {
     setLoading(true);
@@ -77,6 +108,100 @@ export default function PixSettings() {
   };
 
   useEffect(() => { loadData(); }, []);
+
+  const syncPointResponse = (response: PointSetupResponse) => {
+    setPointSetup(response);
+    setPointAccount(response.account);
+    setAccounts(current => current.map(account => account.id === response.account.id ? response.account : account));
+  };
+
+  const openPointSetup = async (account: PixAccount) => {
+    setPointAccount(account);
+    setPointSetup(null);
+    setPointError('');
+    setPointForm({
+      ...emptyPointForm,
+      userId: account.mpUserId || '',
+      storeName: account.name || emptyPointForm.storeName,
+      streetName: account.payerStreetName || '',
+      streetNumber: account.payerStreetNumber || '',
+      cityName: account.payerCity || emptyPointForm.cityName,
+    });
+    setPointOpen(true);
+    setPointLoading(true);
+    try {
+      syncPointResponse(await apiRequest<PointSetupResponse>(`/pix/accounts/${account.id}/point/setup`));
+    } catch (err) {
+      setPointError(getApiErrorMessage(err, 'Erro ao consultar configuracao Point.'));
+    } finally {
+      setPointLoading(false);
+    }
+  };
+
+  const createPointStorePos = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!pointAccount) return;
+    setPointAction('store-pos');
+    setPointError('');
+    try {
+      const response = await apiRequest<PointSetupResponse>(`/pix/accounts/${pointAccount.id}/point/store-pos`, {
+        method: 'POST',
+        body: {
+          userId: pointForm.userId,
+          store: {
+            name: pointForm.storeName,
+            externalId: pointForm.storeExternalId,
+            streetName: pointForm.streetName,
+            streetNumber: pointForm.streetNumber,
+            cityName: pointForm.cityName,
+            stateName: pointForm.stateName,
+            latitude: pointForm.latitude,
+            longitude: pointForm.longitude,
+            reference: pointForm.reference,
+          },
+          pos: {
+            name: pointForm.posName,
+            externalId: pointForm.posExternalId,
+            category: pointForm.category,
+          },
+        },
+      });
+      syncPointResponse(response);
+    } catch (err) {
+      setPointError(getApiErrorMessage(err, 'Erro ao criar loja e caixa no Mercado Pago.'));
+    } finally {
+      setPointAction('');
+    }
+  };
+
+  const refreshPointTerminals = async () => {
+    if (!pointAccount) return;
+    setPointAction('terminals');
+    setPointError('');
+    try {
+      syncPointResponse(await apiRequest<PointSetupResponse>(`/pix/accounts/${pointAccount.id}/point/terminals`));
+    } catch (err) {
+      setPointError(getApiErrorMessage(err, 'Erro ao buscar terminais vinculados.'));
+    } finally {
+      setPointAction('');
+    }
+  };
+
+  const activatePoint = async (terminalId: string) => {
+    if (!pointAccount) return;
+    setPointAction(terminalId);
+    setPointError('');
+    try {
+      syncPointResponse(await apiRequest<PointSetupResponse>(
+        `/pix/accounts/${pointAccount.id}/point/terminals/${encodeURIComponent(terminalId)}/activate`,
+        { method: 'POST' }
+      ));
+    } catch (err) {
+      setPointError(getApiErrorMessage(err, 'Erro ao ativar o modo PDV.'));
+    } finally {
+      setPointAction('');
+    }
+  };
 
   const buildCredentials = () => {
     const capabilities = {
@@ -164,10 +289,6 @@ export default function PixSettings() {
         alert('Informe o Access Token do Mercado Pago.');
         return;
       }
-      if (form.provider === 'mercado_pago' && form.supportsPoint && !form.terminalId.trim()) {
-        alert('Informe o Terminal ID do Mercado Pago Point.');
-        return;
-      }
       await apiRequest(editingAccount ? `/pix/accounts/${editingAccount.id}` : '/pix/accounts', {
         method: editingAccount ? 'PUT' : 'POST',
         body: {
@@ -201,6 +322,7 @@ export default function PixSettings() {
   const provider = providers[form.provider];
   const visibleAccounts = showInactive ? accounts : accounts.filter(account => account.active);
   const inactiveCount = accounts.filter(account => !account.active).length;
+  const pointConfigured = Boolean(pointSetup?.account.storeId && pointSetup?.account.posId);
 
   return (
     <div className="page-container pix-settings-page">
@@ -265,7 +387,22 @@ export default function PixSettings() {
                   )}
                   <span>{account.active ? 'Ativa' : 'Inativa'}</span>
                 </div>
+                {account.provider === 'mercado_pago' && account.supportsPoint ? (
+                  <div className={`point-readiness ${account.terminalId ? 'ready' : ''}`}>
+                    <MonitorSmartphone size={15} />
+                    {account.terminalId
+                      ? 'Point pronto para vendas'
+                      : account.storeId && account.posId
+                        ? 'Aguardando associacao da maquininha'
+                        : 'Loja e caixa ainda nao configurados'}
+                  </div>
+                ) : null}
                 <div className="pix-account-actions">
+                  {account.provider === 'mercado_pago' && account.supportsPoint && account.active ? (
+                    <button className="btn btn-primary btn-sm" onClick={() => openPointSetup(account)}>
+                      <Building2 size={14} /> Configurar Point
+                    </button>
+                  ) : null}
                   <button className="btn btn-secondary btn-sm" onClick={() => openEdit(account)}><Pencil size={14} /> Editar</button>
                   <button className="btn btn-danger btn-sm" onClick={() => removeAccount(account)}><Trash2 size={14} /> Remover</button>
                 </div>
@@ -408,19 +545,8 @@ export default function PixSettings() {
               </div>
               {form.supportsPoint && (
                 <>
-                  <div className="form-group">
-                    <label>Terminal ID Point *</label>
-                    <input className="form-control" required value={form.terminalId} onChange={e => setForm(p => ({ ...p, terminalId: e.target.value }))} placeholder="NEWLAND_N950__N950NCB801293324" />
-                  </div>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>Store ID</label>
-                      <input className="form-control" value={form.storeId} onChange={e => setForm(p => ({ ...p, storeId: e.target.value }))} placeholder="Opcional" />
-                    </div>
-                    <div className="form-group">
-                      <label>POS ID</label>
-                      <input className="form-control" value={form.posId} onChange={e => setForm(p => ({ ...p, posId: e.target.value }))} placeholder="Opcional" />
-                    </div>
+                  <div className="pix-provider-note">
+                    Depois de salvar a conta, use Configurar Point para criar a loja e o caixa no Mercado Pago, associar a maquininha e ativar o modo PDV.
                   </div>
                   <div className="form-row">
                     <div className="form-group">
@@ -470,6 +596,176 @@ export default function PixSettings() {
             <button type="submit" className="btn btn-primary">Salvar Conta</button>
           </div>
         </form>
+      </Modal>
+
+      <Modal isOpen={pointOpen} onClose={() => setPointOpen(false)} title="Configurar Mercado Pago Point" size="wide">
+        {pointLoading ? (
+          <div className="point-loading"><RefreshCw size={20} /> Consultando configuracao...</div>
+        ) : (
+          <div className="point-assistant">
+            {pointError ? <div className="point-error"><AlertTriangle size={17} /> {pointError}</div> : null}
+
+            <div className="point-step">
+              <div className="point-step-number">1</div>
+              <div>
+                <h4>Loja e caixa Mercado Pago</h4>
+                <p>Crie a estrutura que identifica este ponto de venda dentro da conta recebedora.</p>
+              </div>
+              {pointConfigured ? <CheckCircle2 className="point-step-check" size={20} /> : null}
+            </div>
+
+            {!pointConfigured ? (
+              <form onSubmit={createPointStorePos} className="point-setup-form">
+                {!pointSetup?.account.storeId ? (
+                  <>
+                    <h5>Dados da loja fisica</h5>
+                    <div className="form-group">
+                      <label>User ID da conta recebedora *</label>
+                      <input className="form-control" required inputMode="numeric" value={pointForm.userId} onChange={e => setPointForm(p => ({ ...p, userId: e.target.value }))} placeholder="Disponivel nas credenciais da integracao" />
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Nome da loja *</label>
+                        <input className="form-control" required value={pointForm.storeName} onChange={e => setPointForm(p => ({ ...p, storeName: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label>ID externo da loja</label>
+                        <input className="form-control" maxLength={60} value={pointForm.storeExternalId} onChange={e => setPointForm(p => ({ ...p, storeExternalId: e.target.value }))} placeholder="Gerado automaticamente" />
+                      </div>
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Rua *</label>
+                        <input className="form-control" required value={pointForm.streetName} onChange={e => setPointForm(p => ({ ...p, streetName: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label>Numero *</label>
+                        <input className="form-control" required value={pointForm.streetNumber} onChange={e => setPointForm(p => ({ ...p, streetNumber: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Cidade *</label>
+                        <input className="form-control" required value={pointForm.cityName} onChange={e => setPointForm(p => ({ ...p, cityName: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label>Estado *</label>
+                        <select className="form-control" required value={pointForm.stateName} onChange={e => setPointForm(p => ({ ...p, stateName: e.target.value }))}>
+                          {brazilianStates.map(state => <option value={state} key={state}>{state}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Latitude *</label>
+                        <input className="form-control" required inputMode="decimal" value={pointForm.latitude} onChange={e => setPointForm(p => ({ ...p, latitude: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label>Longitude *</label>
+                        <input className="form-control" required inputMode="decimal" value={pointForm.longitude} onChange={e => setPointForm(p => ({ ...p, longitude: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label>Referencia</label>
+                      <input className="form-control" value={pointForm.reference} onChange={e => setPointForm(p => ({ ...p, reference: e.target.value }))} placeholder="Ex: proximo a avenida principal" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="point-resource-row">
+                    <span>Loja criada</span>
+                    <strong>{pointSetup.account.storeId}</strong>
+                  </div>
+                )}
+
+                {!pointSetup?.account.posId ? (
+                  <>
+                    <h5>Dados do caixa</h5>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Nome do caixa *</label>
+                        <input className="form-control" required value={pointForm.posName} onChange={e => setPointForm(p => ({ ...p, posName: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label>ID externo do caixa</label>
+                        <input className="form-control" maxLength={40} value={pointForm.posExternalId} onChange={e => setPointForm(p => ({ ...p, posExternalId: e.target.value }))} placeholder="Gerado automaticamente" />
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label>Categoria MCC *</label>
+                      <input className="form-control" required inputMode="numeric" value={pointForm.category} onChange={e => setPointForm(p => ({ ...p, category: e.target.value }))} />
+                    </div>
+                  </>
+                ) : null}
+
+                <div className="form-actions">
+                  <button className="btn btn-primary" type="submit" disabled={Boolean(pointAction)}>
+                    {pointAction === 'store-pos' ? 'Criando...' : 'Criar loja e caixa'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="point-resource-grid">
+                <div className="point-resource-row"><span>Loja</span><strong>{pointSetup?.account.storeId}</strong></div>
+                <div className="point-resource-row"><span>Caixa</span><strong>{pointSetup?.account.posId}</strong></div>
+              </div>
+            )}
+
+            {pointConfigured ? (
+              <>
+                <div className="point-step">
+                  <div className="point-step-number">2</div>
+                  <div>
+                    <h4>Associar a maquininha</h4>
+                    <p>Ligue o Point, escaneie o QR exibido usando o aplicativo Mercado Pago da conta recebedora e selecione esta loja e este caixa.</p>
+                  </div>
+                  {pointSetup?.terminals.length ? <CheckCircle2 className="point-step-check" size={20} /> : null}
+                </div>
+
+                <div className="point-terminal-toolbar">
+                  <span>Depois de concluir na maquininha, atualize a busca.</span>
+                  <button className="btn btn-secondary" onClick={refreshPointTerminals} disabled={Boolean(pointAction)}>
+                    <RefreshCw size={15} /> {pointAction === 'terminals' ? 'Buscando...' : 'Buscar terminais'}
+                  </button>
+                </div>
+
+                <div className="point-step">
+                  <div className="point-step-number">3</div>
+                  <div>
+                    <h4>Ativar modo PDV</h4>
+                    <p>Ative o terminal vinculado e reinicie a maquininha ao concluir.</p>
+                  </div>
+                  {pointSetup?.account.terminalId ? <CheckCircle2 className="point-step-check" size={20} /> : null}
+                </div>
+
+                {pointSetup?.terminals.length ? (
+                  <div className="point-terminal-list">
+                    {pointSetup.terminals.map(terminal => {
+                      const ready = terminal.operatingMode === 'PDV' && pointSetup.account.terminalId === terminal.id;
+                      return (
+                        <div className="point-terminal-row" key={terminal.id}>
+                          <MonitorSmartphone size={20} />
+                          <div>
+                            <strong>{terminal.id}</strong>
+                            <span>Modo: {terminal.operatingMode || 'UNDEFINED'}</span>
+                          </div>
+                          {ready ? (
+                            <span className="point-terminal-ready"><CheckCircle2 size={15} /> Pronto</span>
+                          ) : (
+                            <button className="btn btn-primary btn-sm" onClick={() => activatePoint(terminal.id)} disabled={Boolean(pointAction)}>
+                              {pointAction === terminal.id ? 'Ativando...' : 'Ativar PDV'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="point-empty-terminal">Nenhuma maquininha associada a este caixa foi encontrada.</div>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
       </Modal>
     </div>
   );

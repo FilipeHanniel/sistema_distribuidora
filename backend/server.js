@@ -21,6 +21,13 @@ const {
   removeManagedCertificate,
   storeFiscalCertificate,
 } = require('./fiscalCertificateService');
+const {
+  activatePointTerminal,
+  createPointPos,
+  createPointStore,
+  getMercadoPagoUser,
+  listPointTerminals,
+} = require('./mercadoPagoPointService');
 
 const app = express();
 
@@ -260,6 +267,9 @@ const sanitizePixAccount = (account) => {
     terminalId: credentials.terminalId || '',
     storeId: credentials.storeId || '',
     posId: credentials.posId || '',
+    mpUserId: credentials.mpUserId || '',
+    storeExternalId: credentials.storeExternalId || '',
+    posExternalId: credentials.posExternalId || '',
     defaultType: credentials.defaultType || 'credit_card',
     defaultInstallments: Number(credentials.defaultInstallments || 1),
     active: account.active,
@@ -291,6 +301,52 @@ const sanitizePaymentTransaction = (transaction) => {
     providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
     confirmationSource: source,
   };
+};
+
+const savePixAccountCredentials = (account, updates) => {
+  const credentials = {
+    ...decodeCredentials(account.credentials),
+    ...updates,
+  };
+  const now = new Date().toISOString();
+  db.prepare('UPDATE pix_accounts SET credentials = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+    .run(encodeCredentials(credentials), now, account.id, account.establishmentId);
+  return db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+    .get(account.id, account.establishmentId);
+};
+
+const getMercadoPagoPointAccount = (accountId, establishmentId) => {
+  const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+    .get(accountId, establishmentId);
+  if (!account) {
+    const error = new Error('Conta de recebimento nao encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (account.provider !== 'mercado_pago') {
+    const error = new Error('A configuracao Point esta disponivel apenas para contas Mercado Pago.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const credentials = decodeCredentials(account.credentials);
+  if (!credentials.supportsPoint) {
+    const error = new Error('Habilite terminal/cartao nesta conta antes de configurar o Point.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!String(credentials.accessToken || '').trim()) {
+    const error = new Error('Access Token do Mercado Pago nao configurado.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { account, credentials };
+};
+
+const getPointSetupErrorStatus = (error) => {
+  if (error.statusCode) return error.statusCode;
+  if (error.providerStatus >= 400 && error.providerStatus < 500) return 400;
+  if (error.providerStatus) return 502;
+  return 500;
 };
 
 const sanitizePaymentTransactionForPanel = (transaction) => {
@@ -1703,10 +1759,6 @@ app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => 
     if (provider === 'mercado_pago' && !String(credentials?.accessToken || '').trim()) {
       return res.status(400).json({ error: 'Access Token do Mercado Pago e obrigatorio.' });
     }
-    if (provider === 'mercado_pago' && credentials?.supportsPoint && !String(credentials?.terminalId || '').trim()) {
-      return res.status(400).json({ error: 'Terminal ID do Mercado Pago Point e obrigatorio.' });
-    }
-
     const existingCount = db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ?').get(estId).c;
     if (existingCount >= 3) return res.status(400).json({ error: 'Limite inicial de 3 contas Pix atingido.' });
 
@@ -1745,9 +1797,6 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) 
     if (provider === 'mercado_pago' && !String(mergedCredentials.accessToken || '').trim()) {
       return res.status(400).json({ error: 'Access Token do Mercado Pago e obrigatorio.' });
     }
-    if (provider === 'mercado_pago' && mergedCredentials.supportsPoint && !String(mergedCredentials.terminalId || '').trim()) {
-      return res.status(400).json({ error: 'Terminal ID do Mercado Pago Point e obrigatorio.' });
-    }
     const now = new Date().toISOString();
 
     const updateAccount = db.transaction(() => {
@@ -1763,6 +1812,147 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) 
     res.json(sanitizePixAccount(db.prepare('SELECT * FROM pix_accounts WHERE id = ?').get(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/pix/accounts/:id/point/setup', authenticateToken, isGestor, async (req, res) => {
+  try {
+    const { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
+    const terminals = credentials.storeId || credentials.posId
+      ? await listPointTerminals({
+        accessToken: credentials.accessToken,
+        storeId: credentials.storeId,
+        posId: credentials.posId,
+      })
+      : [];
+    res.json({
+      account: sanitizePixAccount(account),
+      terminals,
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Point Setup Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
+  }
+});
+
+app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, async (req, res) => {
+  try {
+    let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
+    const accountSuffix = account.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20).toUpperCase();
+    const requestedUserId = String(req.body.userId || '').trim();
+
+    if (requestedUserId && requestedUserId !== credentials.mpUserId) {
+      account = savePixAccountCredentials(account, { mpUserId: requestedUserId });
+      credentials = decodeCredentials(account.credentials);
+    } else if (!credentials.mpUserId) {
+      const user = await getMercadoPagoUser(credentials.accessToken);
+      account = savePixAccountCredentials(account, { mpUserId: user.id });
+      credentials = decodeCredentials(account.credentials);
+    }
+
+    if (!credentials.storeId) {
+      const store = await createPointStore({
+        accessToken: credentials.accessToken,
+        userId: credentials.mpUserId,
+        store: {
+          ...(req.body.store || {}),
+          externalId: req.body.store?.externalId || `SD${accountSuffix}`,
+        },
+      });
+      account = savePixAccountCredentials(account, {
+        storeId: store.id,
+        storeExternalId: store.externalId,
+      });
+      credentials = decodeCredentials(account.credentials);
+    }
+
+    if (!credentials.posId) {
+      const pos = await createPointPos({
+        accessToken: credentials.accessToken,
+        storeId: credentials.storeId,
+        storeExternalId: credentials.storeExternalId,
+        pos: {
+          ...(req.body.pos || {}),
+          externalId: req.body.pos?.externalId || `SD${accountSuffix}POS`,
+        },
+      });
+      account = savePixAccountCredentials(account, {
+        posId: pos.id,
+        posExternalId: pos.externalId,
+      });
+      credentials = decodeCredentials(account.credentials);
+    }
+
+    res.status(201).json({
+      account: sanitizePixAccount(account),
+      terminals: [],
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Point Store/POS Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
+  }
+});
+
+app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, isGestor, async (req, res) => {
+  try {
+    const { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
+    if (!credentials.storeId || !credentials.posId) {
+      return res.status(400).json({ error: 'Crie a loja e o caixa antes de buscar terminais.' });
+    }
+    const terminals = await listPointTerminals({
+      accessToken: credentials.accessToken,
+      storeId: credentials.storeId,
+      posId: credentials.posId,
+    });
+    res.json({
+      account: sanitizePixAccount(account),
+      terminals,
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Point Terminals Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
+  }
+});
+
+app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authenticateToken, isGestor, async (req, res) => {
+  try {
+    let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
+    if (!credentials.storeId || !credentials.posId) {
+      return res.status(400).json({ error: 'Crie a loja e o caixa antes de ativar o terminal.' });
+    }
+    const terminals = await listPointTerminals({
+      accessToken: credentials.accessToken,
+      storeId: credentials.storeId,
+      posId: credentials.posId,
+    });
+    const terminal = terminals.find(item => item.id === req.params.terminalId);
+    if (!terminal) return res.status(404).json({ error: 'Terminal nao encontrado no caixa configurado.' });
+    const activeTerminal = terminals.find(item => item.operatingMode === 'PDV' && item.id !== terminal.id);
+    if (activeTerminal) {
+      return res.status(409).json({
+        error: `O caixa ja possui o terminal ${activeTerminal.id} em modo PDV. Cada caixa aceita apenas um terminal integrado.`,
+      });
+    }
+
+    if (terminal.operatingMode !== 'PDV') {
+      await activatePointTerminal({
+        accessToken: credentials.accessToken,
+        terminalId: terminal.id,
+      });
+    }
+    account = savePixAccountCredentials(account, { terminalId: terminal.id });
+    const refreshedTerminals = await listPointTerminals({
+      accessToken: credentials.accessToken,
+      storeId: credentials.storeId,
+      posId: credentials.posId,
+    });
+    res.json({
+      account: sanitizePixAccount(account),
+      terminals: refreshedTerminals,
+    });
+  } catch (err) {
+    console.error('[Mercado Pago Point Activation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
   }
 });
 

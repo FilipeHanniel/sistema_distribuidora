@@ -23,10 +23,20 @@ No painel de Recebimentos, a conta Mercado Pago precisa ter:
 - Access Token correspondente ao ambiente;
 - ambiente `teste` ou `producao`;
 - opcao de terminal/cartao habilitada;
-- Terminal ID Point vinculado a conta;
 - modalidade e parcelas padrao.
 
-Para operacao real, o terminal deve estar vinculado a conta produtiva e configurado no modo PDV.
+Depois de salvar a conta, o botao `Configurar Point` executa o fluxo oficial:
+
+1. cria a loja e o caixa no Mercado Pago;
+2. aguarda a associacao fisica da maquininha pelo aplicativo Mercado Pago;
+3. busca os terminais associados ao caixa;
+4. ativa o terminal escolhido no modo PDV e salva o Terminal ID.
+
+A associacao fisica nao pode ser automatizada pela API. O responsavel deve ligar a maquininha, escanear o QR exibido com o aplicativo Mercado Pago da conta recebedora e selecionar a loja e o caixa criados. Depois de ativar o modo PDV, reinicie o terminal.
+
+Cada caixa aceita apenas um terminal em modo PDV. Para integrar outra maquininha, sera necessario criar outro caixa.
+
+No ambiente de teste, informe no assistente o `User ID` numerico exibido nas credenciais de teste da integracao. Ele identifica a conta recebedora usada para criar a loja.
 
 ## Testes
 

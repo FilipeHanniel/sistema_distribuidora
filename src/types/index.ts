@@ -78,6 +78,9 @@ export interface PixAccount {
   terminalId?: string;
   storeId?: string;
   posId?: string;
+  mpUserId?: string;
+  storeExternalId?: string;
+  posExternalId?: string;
   defaultType?: 'credit_card' | 'debit_card';
   defaultInstallments?: number;
   mpEnvironment?: string;
@@ -182,6 +185,19 @@ export interface PaymentTransactionRecord {
   expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PointTerminal {
+  id: string;
+  posId?: string;
+  storeId?: string;
+  externalPosId?: string;
+  operatingMode?: 'PDV' | 'STANDALONE' | 'UNDEFINED' | string;
+}
+
+export interface PointSetupResponse {
+  account: PixAccount;
+  terminals: PointTerminal[];
 }
 
 export interface PaymentTransactionSummary {
