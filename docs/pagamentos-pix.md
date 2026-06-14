@@ -32,6 +32,24 @@ O webhook Mercado Pago fica adiado ate existir um ambiente de producao controlad
 - Pix e cartao nao podem ser registrados pela rota de venda direta sem confirmacao do provider.
 - O comprovante registra o provider, os identificadores e o canal `Consulta automatica`.
 - O cancelamento envia uma chave de idempotencia propria.
+- A tentativa de pagamento e registrada antes da chamada ao provider; falhas de criacao continuam visiveis para suporte.
+
+## Painel de transacoes e conciliacao
+
+O gestor acessa **Transacoes** no menu lateral para acompanhar todas as tentativas de Pix e cartao do estabelecimento.
+
+O painel permite:
+
+- filtrar por periodo, status, metodo, provider e identificadores;
+- visualizar IDs locais, Order ID, Payment ID e referencia externa;
+- identificar pagamento confirmado sem venda vinculada;
+- identificar cobranca vencida ainda pendente ou falha retornada pelo provider;
+- reconsultar manualmente uma cobranca pendente;
+- retomar com seguranca a finalizacao de uma venda ja paga.
+
+A conciliacao reutiliza a finalizacao atomica da transacao. Consultas repetidas nao devem criar vendas duplicadas nem baixar o estoque novamente.
+
+Tentativas com status `error` e sem ID do provider falharam antes da criacao da cobranca. Nesse caso, o operador deve iniciar uma nova venda no PDV.
 
 ## Ambiente de teste Mercado Pago
 

@@ -148,6 +148,43 @@ export interface PaymentConfirmation {
   confirmationSource: 'polling' | 'provider' | 'simulated';
 }
 
+export type PaymentTransactionStatus = 'pending' | 'paid' | 'cancelled' | 'expired' | 'processing' | 'error';
+export type PaymentTransactionIssue = 'provider_error' | 'paid_without_sale' | 'finalization_in_progress' | 'expired_pending';
+
+export interface PaymentTransactionRecord {
+  id: string;
+  provider: string;
+  providerTransactionId?: string | null;
+  providerPaymentId?: string | null;
+  externalReference?: string | null;
+  accountName?: string | null;
+  status: PaymentTransactionStatus;
+  paymentMethod: 'pix' | 'card';
+  amount: number;
+  saleId?: string | null;
+  fiscalStatus?: string | null;
+  error?: string | null;
+  issue?: PaymentTransactionIssue | null;
+  confirmationSource?: 'polling' | 'provider' | 'simulated' | null;
+  providerStatus?: string | null;
+  providerStatusDetail?: string | null;
+  itemCount: number;
+  paidAt?: string | null;
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentTransactionSummary {
+  totalCount: number;
+  totalAmount: number;
+  paidCount: number;
+  paidAmount: number;
+  pendingCount: number;
+  errorCount: number;
+  attentionCount: number;
+}
+
 export interface AppNotification {
   id: string;
   establishmentId?: string;

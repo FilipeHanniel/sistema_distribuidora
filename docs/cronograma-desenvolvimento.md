@@ -26,7 +26,8 @@ Objetivo: deixar Pix e cartao preparados para uso real por estabelecimento.
 - Mercado Pago Pix em ambiente de teste confirmado por polling. [docs/pagamentos-pix.md](pagamentos-pix.md)
 - Registrar confirmacao do provedor e canal de consulta no comprovante.
 - Validar webhook Mercado Pago somente em ambiente de producao controlado.
-- Criar painel de transacoes de pagamento.
+- Criar painel de transacoes de pagamento. Concluido em 14/06/2026.
+- Registrar falhas de criacao e permitir conciliacao manual segura. Concluido em 14/06/2026.
 - Definir padrao para novos provedores: Asaas, Sicoob, Itau, Santander, Bradesco.
 
 ## Fase 3 - Fiscal NFC-e
@@ -116,8 +117,9 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 Consolidar a Fase 2 sem depender do webhook em sandbox:
 
 1. Validar novamente venda + Pix Mercado Pago teste por polling + fiscal fake + comprovante.
-2. Criar painel de transacoes de pagamento para suporte e conciliacao.
+2. Validar o painel de transacoes e conciliacao no VPS.
 3. Preparar testes automatizados de venda duplicada e falha fiscal.
-4. Retomar webhook apenas com uma cobranca real controlada.
+4. Definir o contrato padrao para novos provedores de pagamento.
+5. Retomar webhook apenas com uma cobranca real controlada.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PROVIDERS, getPixProvider, getPointProvider, makeProviderReference } = require('./pixProviders');
 const { getFiscalProvider } = require('./fiscalProviders');
+const { getPaymentTransactionIssue } = require('./paymentReconciliation');
 
 const app = express();
 
@@ -147,6 +148,13 @@ const isGestorOrAbove = (req, res, next) => {
   next();
 };
 
+const isGestor = (req, res, next) => {
+  if (req.user.role !== 'gestor') {
+    return res.status(403).json({ error: 'Acesso restrito ao Gestor do estabelecimento.' });
+  }
+  next();
+};
+
 const isTenantUser = (req, res, next) => {
   if (req.user.role === 'superadmin') {
     return res.status(403).json({ error: 'Super Admin não opera dados de venda ou estoque diretamente.' });
@@ -272,6 +280,39 @@ const sanitizePaymentTransaction = (transaction) => {
   };
 };
 
+const sanitizePaymentTransactionForPanel = (transaction) => {
+  if (!transaction) return null;
+  const payload = parseTransactionPayload(transaction);
+  const providerPayload = payload.latestProviderPayload || payload.providerPayload || {};
+  const payment = providerPayload.transactions?.payments?.[0] || {};
+  const source = payload.confirmationSource || (['fake', 'mercado_pago_fake'].includes(transaction.provider) ? 'simulated' : null);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  return {
+    id: transaction.id,
+    provider: transaction.provider,
+    providerTransactionId: transaction.providerTransactionId,
+    providerPaymentId: payload.providerPaymentId || payment.id || null,
+    externalReference: payload.externalReference || providerPayload.external_reference || null,
+    accountName: transaction.accountName || null,
+    status: transaction.status,
+    paymentMethod: transaction.paymentMethod,
+    amount: transaction.amount,
+    saleId: transaction.saleId,
+    fiscalStatus: transaction.fiscalStatus || null,
+    error: transaction.error || null,
+    issue: getPaymentTransactionIssue(transaction),
+    confirmationSource: source,
+    providerStatus: providerPayload.status || payment.status || null,
+    providerStatusDetail: providerPayload.status_detail || payment.status_detail || null,
+    itemCount: items.reduce((total, item) => total + Number(item.quantity || 0), 0),
+    paidAt: transaction.paidAt,
+    expiresAt: transaction.expiresAt,
+    createdAt: transaction.createdAt,
+    updatedAt: transaction.updatedAt,
+  };
+};
+
 const getPaymentTransactionForSale = (saleId, estId) => {
   const transaction = db.prepare(`
     SELECT *
@@ -386,7 +427,7 @@ const refreshPixTransactionFromProvider = async ({ transaction, userId = null })
   const paidAt = statusResult.paidAt || transaction.paidAt || null;
   db.prepare(`
     UPDATE payment_transactions
-    SET status = ?, paidAt = ?, updatedAt = ?, payload = ?
+    SET status = ?, paidAt = ?, updatedAt = ?, payload = ?, error = NULL
     WHERE id = ? AND saleId IS NULL AND status = 'pending'
   `).run(status, paidAt, new Date().toISOString(), JSON.stringify(nextPayload), transaction.id);
 
@@ -414,6 +455,40 @@ const refreshPixTransactionFromProvider = async ({ transaction, userId = null })
     fiscalDocument,
     payload: parseTransactionPayload(latest),
   };
+};
+
+const refreshCardTransactionFromProvider = async ({ transaction, userId = null }) => {
+  const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?')
+    .get(transaction.pixAccountId, transaction.establishmentId);
+  if (!account) throw new Error('Conta da transacao nao encontrada.');
+
+  const statusResult = await getPointProvider(account.provider).getStatus({
+    transaction,
+    credentials: decodeCredentials(account.credentials),
+  });
+  const currentPayload = parseTransactionPayload(transaction);
+  const nextPayload = {
+    ...currentPayload,
+    latestProviderPayload: statusResult.payload || null,
+    confirmationSource: statusResult.status === 'paid' ? 'polling' : currentPayload.confirmationSource,
+  };
+  db.prepare(`
+    UPDATE payment_transactions
+    SET status = ?, paidAt = ?, updatedAt = ?, payload = ?, error = NULL
+    WHERE id = ? AND saleId IS NULL AND status = 'pending'
+  `).run(
+    statusResult.status,
+    statusResult.paidAt || transaction.paidAt || null,
+    new Date().toISOString(),
+    JSON.stringify(nextPayload),
+    transaction.id
+  );
+
+  let latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
+  if (['paid', 'processing'].includes(latest.status) && !latest.saleId) {
+    latest = await finalizePaidTransaction({ transactionId: latest.id, userId });
+  }
+  return latest;
 };
 
 const sanitizeFiscalSettings = (settings) => {
@@ -1578,6 +1653,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
 });
 
 app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) => {
+  let transactionId = null;
   try {
     const { items, totalAmount, pixAccountId, deviceId } = req.body;
     const estId = req.user.establishmentId;
@@ -1595,9 +1671,30 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       return res.status(400).json({ error: 'Provider Pix ainda nao implementado para cobranca real.' });
     }
 
-    const transactionId = uuidv4();
+    transactionId = uuidv4();
     const referenceId = makeProviderReference();
     const provider = getPixProvider(account.provider);
+    const createdAt = new Date().toISOString();
+    const initialPayload = JSON.stringify({
+      items: preparedSale.items,
+      externalReference: referenceId,
+    });
+    db.prepare(`
+      INSERT INTO payment_transactions (
+        id, establishmentId, pixAccountId, provider, status, amount, paymentMethod,
+        payload, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, 'pending', ?, 'pix', ?, ?, ?)
+    `).run(
+      transactionId,
+      estId,
+      account.id,
+      account.provider,
+      preparedSale.totalAmount,
+      initialPayload,
+      createdAt,
+      createdAt
+    );
+
     const charge = await provider.createCharge({
       amount: preparedSale.totalAmount,
       referenceId,
@@ -1606,22 +1703,16 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       items: preparedSale.items,
       deviceId,
     });
-    const createdAt = new Date().toISOString();
     const initialStatus = account.provider === 'mercado_pago' ? 'pending' : charge.status;
 
     db.prepare(`
-      INSERT INTO payment_transactions (
-        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
-        qrCode, qrCodeBase64, ticketUrl, payload, expiresAt, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pix', ?, ?, ?, ?, ?, ?, ?)
+      UPDATE payment_transactions
+      SET providerTransactionId = ?, status = ?, qrCode = ?, qrCodeBase64 = ?, ticketUrl = ?,
+          payload = ?, expiresAt = ?, error = NULL, updatedAt = ?
+      WHERE id = ?
     `).run(
-      transactionId,
-      estId,
-      account.id,
-      account.provider,
       charge.providerTransactionId,
       initialStatus,
-      preparedSale.totalAmount,
       charge.qrCode || '',
       charge.qrCodeBase64 || '',
       charge.ticketUrl || '',
@@ -1632,8 +1723,8 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
         providerPayload: charge.payload || null,
       }),
       charge.expiresAt || null,
-      createdAt,
-      createdAt
+      new Date().toISOString(),
+      transactionId
     );
 
     res.status(201).json({
@@ -1651,6 +1742,13 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) 
       pixAccount: sanitizePixAccount(account),
     });
   } catch (err) {
+    if (transactionId) {
+      db.prepare(`
+        UPDATE payment_transactions
+        SET status = 'error', error = ?, updatedAt = ?
+        WHERE id = ? AND saleId IS NULL
+      `).run(err.message, new Date().toISOString(), transactionId);
+    }
     console.error('[Pix Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1663,7 +1761,146 @@ app.get('/api/payments/config', authenticateToken, isTenantUser, (req, res) => {
   });
 });
 
+app.get('/api/payments/transactions', authenticateToken, isGestor, (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const where = ['pt.establishmentId = ?'];
+    const params = [estId];
+    const status = String(req.query.status || '').trim();
+    const provider = String(req.query.provider || '').trim();
+    const paymentMethod = String(req.query.paymentMethod || '').trim();
+    const startDate = String(req.query.startDate || '').trim();
+    const endDate = String(req.query.endDate || '').trim();
+    const search = String(req.query.search || '').trim();
+
+    if (status === 'attention') {
+      where.push(`(
+        pt.error IS NOT NULL
+        OR (pt.status = 'paid' AND pt.saleId IS NULL)
+        OR (pt.status = 'processing' AND pt.saleId IS NULL)
+        OR (pt.status = 'pending' AND pt.expiresAt IS NOT NULL AND pt.expiresAt < ?)
+      )`);
+      params.push(new Date().toISOString());
+    } else if (['pending', 'paid', 'cancelled', 'expired', 'processing', 'error'].includes(status)) {
+      where.push('pt.status = ?');
+      params.push(status);
+    }
+    if (provider && PROVIDERS[provider]) {
+      where.push('pt.provider = ?');
+      params.push(provider);
+    }
+    if (['pix', 'card'].includes(paymentMethod)) {
+      where.push('pt.paymentMethod = ?');
+      params.push(paymentMethod);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      where.push('pt.createdAt >= ?');
+      params.push(`${startDate}T00:00:00.000`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      where.push('pt.createdAt <= ?');
+      params.push(`${endDate}T23:59:59.999`);
+    }
+    if (search) {
+      where.push(`(
+        pt.id LIKE ?
+        OR pt.providerTransactionId LIKE ?
+        OR pt.saleId LIKE ?
+        OR pt.error LIKE ?
+        OR pa.name LIKE ?
+      )`);
+      const term = `%${search}%`;
+      params.push(term, term, term, term, term);
+    }
+
+    const whereSql = where.join(' AND ');
+    const transactions = db.prepare(`
+      SELECT pt.*, pa.name as accountName, s.fiscalStatus
+      FROM payment_transactions pt
+      LEFT JOIN pix_accounts pa ON pa.id = pt.pixAccountId AND pa.establishmentId = pt.establishmentId
+      LEFT JOIN sales s ON s.id = pt.saleId AND s.establishmentId = pt.establishmentId
+      WHERE ${whereSql}
+      ORDER BY pt.createdAt DESC
+      LIMIT 250
+    `).all(...params);
+
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) as totalCount,
+        COALESCE(SUM(pt.amount), 0) as totalAmount,
+        SUM(CASE WHEN pt.status = 'paid' THEN 1 ELSE 0 END) as paidCount,
+        COALESCE(SUM(CASE WHEN pt.status = 'paid' THEN pt.amount ELSE 0 END), 0) as paidAmount,
+        SUM(CASE WHEN pt.status = 'pending' THEN 1 ELSE 0 END) as pendingCount,
+        SUM(CASE WHEN pt.status = 'error' OR pt.error IS NOT NULL THEN 1 ELSE 0 END) as errorCount,
+        SUM(CASE WHEN
+          pt.error IS NOT NULL
+          OR (pt.status = 'paid' AND pt.saleId IS NULL)
+          OR (pt.status = 'processing' AND pt.saleId IS NULL)
+          OR (pt.status = 'pending' AND pt.expiresAt IS NOT NULL AND pt.expiresAt < ?)
+          THEN 1 ELSE 0 END) as attentionCount
+      FROM payment_transactions pt
+      LEFT JOIN pix_accounts pa ON pa.id = pt.pixAccountId AND pa.establishmentId = pt.establishmentId
+      WHERE ${whereSql}
+    `).get(new Date().toISOString(), ...params);
+
+    res.json({
+      transactions: transactions.map(sanitizePaymentTransactionForPanel),
+      summary: {
+        totalCount: Number(summary.totalCount || 0),
+        totalAmount: Number(summary.totalAmount || 0),
+        paidCount: Number(summary.paidCount || 0),
+        paidAmount: Number(summary.paidAmount || 0),
+        pendingCount: Number(summary.pendingCount || 0),
+        errorCount: Number(summary.errorCount || 0),
+        attentionCount: Number(summary.attentionCount || 0),
+      },
+    });
+  } catch (err) {
+    console.error('[Payment Transactions Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor, async (req, res) => {
+  const estId = req.user.establishmentId;
+  try {
+    let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?')
+      .get(req.params.id, estId);
+    if (!transaction) return res.status(404).json({ error: 'Transacao de pagamento nao encontrada.' });
+
+    if (transaction.status === 'error' && !transaction.providerTransactionId) {
+      return res.status(409).json({
+        error: 'A cobranca falhou antes de ser criada no provedor. Inicie uma nova venda no PDV.',
+      });
+    }
+    if (transaction.status === 'pending') {
+      transaction = transaction.paymentMethod === 'card'
+        ? await refreshCardTransactionFromProvider({ transaction, userId: req.user.id })
+        : (await refreshPixTransactionFromProvider({ transaction, userId: req.user.id })).transaction;
+    } else if (['paid', 'processing'].includes(transaction.status) && !transaction.saleId) {
+      transaction = await finalizePaidTransaction({ transactionId: transaction.id, userId: req.user.id });
+    }
+
+    db.prepare('UPDATE payment_transactions SET error = NULL, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+      .run(new Date().toISOString(), transaction.id, estId);
+    const detailed = db.prepare(`
+      SELECT pt.*, pa.name as accountName, s.fiscalStatus
+      FROM payment_transactions pt
+      LEFT JOIN pix_accounts pa ON pa.id = pt.pixAccountId AND pa.establishmentId = pt.establishmentId
+      LEFT JOIN sales s ON s.id = pt.saleId AND s.establishmentId = pt.establishmentId
+      WHERE pt.id = ? AND pt.establishmentId = ?
+    `).get(transaction.id, estId);
+    res.json(sanitizePaymentTransactionForPanel(detailed));
+  } catch (err) {
+    db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+      .run(err.message, new Date().toISOString(), req.params.id, estId);
+    console.error('[Payment Reconciliation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus } : '');
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res) => {
+  let transactionId = null;
   try {
     const { items, totalAmount, accountId } = req.body;
     const estId = req.user.establishmentId;
@@ -1682,34 +1919,49 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       return res.status(400).json({ error: 'Provider sem suporte a terminal/Point.' });
     }
 
-    const transactionId = uuidv4();
+    transactionId = uuidv4();
     const referenceId = makeProviderReference();
     const provider = getPointProvider(account.provider);
+    const createdAt = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO payment_transactions (
+        id, establishmentId, pixAccountId, provider, status, amount, paymentMethod,
+        payload, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, 'pending', ?, 'card', ?, ?, ?)
+    `).run(
+      transactionId,
+      estId,
+      account.id,
+      account.provider,
+      preparedSale.totalAmount,
+      JSON.stringify({ items: preparedSale.items, externalReference: referenceId }),
+      createdAt,
+      createdAt
+    );
+
     const order = await provider.createOrder({
       amount: preparedSale.totalAmount,
       referenceId,
       credentials,
       description: `Venda PDV ${transactionId}`,
     });
-    const createdAt = new Date().toISOString();
 
     db.prepare(`
-      INSERT INTO payment_transactions (
-        id, establishmentId, pixAccountId, provider, providerTransactionId, status, amount, paymentMethod,
-        payload, expiresAt, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'card', ?, ?, ?, ?)
+      UPDATE payment_transactions
+      SET providerTransactionId = ?, status = ?, payload = ?, expiresAt = ?, error = NULL, updatedAt = ?
+      WHERE id = ?
     `).run(
-      transactionId,
-      estId,
-      account.id,
-      account.provider,
       order.providerTransactionId,
       order.status,
-      preparedSale.totalAmount,
-      JSON.stringify({ items: preparedSale.items, providerPaymentId: order.providerPaymentId || null, providerPayload: order.payload || null }),
+      JSON.stringify({
+        items: preparedSale.items,
+        providerPaymentId: order.providerPaymentId || null,
+        externalReference: referenceId,
+        providerPayload: order.payload || null,
+      }),
       order.expiresAt || null,
-      createdAt,
-      createdAt
+      new Date().toISOString(),
+      transactionId
     );
 
     res.status(201).json({
@@ -1722,6 +1974,13 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res)
       expiresAt: order.expiresAt || null,
     });
   } catch (err) {
+    if (transactionId) {
+      db.prepare(`
+        UPDATE payment_transactions
+        SET status = 'error', error = ?, updatedAt = ?
+        WHERE id = ? AND saleId IS NULL
+      `).run(err.message, new Date().toISOString(), transactionId);
+    }
     console.error('[Card Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1735,24 +1994,8 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
     if (!transaction) return res.status(404).json({ error: 'Transacao de cartao nao encontrada.' });
 
     if (transaction.status === 'pending') {
-      const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(transaction.pixAccountId, estId);
-      if (!account) return res.status(404).json({ error: 'Conta da transacao nao encontrada.' });
-      const statusResult = await getPointProvider(account.provider).getStatus({
-        transaction,
-        credentials: decodeCredentials(account.credentials),
-      });
-      db.prepare(`
-        UPDATE payment_transactions
-        SET status = ?, paidAt = ?, updatedAt = ?, payload = ?
-        WHERE id = ? AND saleId IS NULL AND status = 'pending'
-      `).run(statusResult.status, statusResult.paidAt || transaction.paidAt || null, new Date().toISOString(), JSON.stringify({
-          ...JSON.parse(transaction.payload || '{}'),
-          latestProviderPayload: statusResult.payload || null,
-        }), transaction.id);
-      transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ?').get(transaction.id);
-    }
-
-    if (['paid', 'processing'].includes(transaction.status) && !transaction.saleId) {
+      transaction = await refreshCardTransactionFromProvider({ transaction, userId: req.user.id });
+    } else if (['paid', 'processing'].includes(transaction.status) && !transaction.saleId) {
       transaction = await finalizePaidTransaction({ transactionId: transaction.id, userId: req.user.id });
     }
 
@@ -1774,6 +2017,8 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
       expiresAt: transaction.expiresAt,
     });
   } catch (err) {
+    db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+      .run(err.message, new Date().toISOString(), req.params.id, req.user.establishmentId);
     console.error('[Card Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
   }
@@ -1821,6 +2066,8 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
       expiresAt: transaction.expiresAt,
     });
   } catch (err) {
+    db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+      .run(err.message, new Date().toISOString(), req.params.id, req.user.establishmentId);
     console.error('[Pix Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
     res.status(500).json({ error: err.message });
   }

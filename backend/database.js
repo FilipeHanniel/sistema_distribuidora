@@ -261,6 +261,7 @@ const initDB = () => {
     'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
     'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
     'ALTER TABLE payment_transactions ADD COLUMN payload TEXT',
+    'ALTER TABLE payment_transactions ADD COLUMN error TEXT',
     "ALTER TABLE fiscal_settings ADD COLUMN providerMode TEXT DEFAULT 'simulated'",
     'ALTER TABLE fiscal_documents ADD COLUMN validationMessages TEXT',
     'ALTER TABLE fiscal_documents ADD COLUMN cStat TEXT',
