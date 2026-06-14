@@ -63,10 +63,18 @@ test('valida dados do caixa Point', () => {
   assert.deepEqual(validatePosInput({
     name: 'Caixa principal',
     externalId: 'POS001',
-    category: '621102',
+    category: '5411',
   }), {
     name: 'Caixa principal',
     externalId: 'POS001',
-    category: 621102,
+    category: 5411,
   });
+});
+
+test('rejeita categoria que nao representa um MCC de quatro digitos', () => {
+  assert.throws(() => validatePosInput({
+    name: 'Caixa principal',
+    externalId: 'POS001',
+    category: '621102',
+  }), /4 digitos/);
 });

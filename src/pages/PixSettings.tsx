@@ -26,6 +26,16 @@ const brazilianStates = [
   'Roraima', 'Santa Catarina', 'Sergipe', 'São Paulo', 'Tocantins',
 ];
 
+const pointMccOptions = [
+  { value: '5411', label: '5411 - Mercados e supermercados' },
+  { value: '5499', label: '5499 - Outros comercios de alimentos' },
+  { value: '5921', label: '5921 - Bebidas e adegas' },
+  { value: '5399', label: '5399 - Comercio geral e variedades' },
+  { value: '5999', label: '5999 - Outros comercios varejistas' },
+  { value: '5812', label: '5812 - Restaurantes' },
+  { value: '5814', label: '5814 - Lanchonetes e fast-food' },
+];
+
 const emptyPointForm = {
   userId: '',
   storeName: 'Loja principal',
@@ -39,7 +49,7 @@ const emptyPointForm = {
   reference: '',
   posName: 'Caixa principal',
   posExternalId: '',
-  category: '621102',
+  category: '5411',
 };
 
 const emptyForm = {
@@ -692,7 +702,9 @@ export default function PixSettings() {
                     </div>
                     <div className="form-group">
                       <label>Categoria MCC *</label>
-                      <input className="form-control" required inputMode="numeric" value={pointForm.category} onChange={e => setPointForm(p => ({ ...p, category: e.target.value }))} />
+                      <select className="form-control" required value={pointForm.category} onChange={e => setPointForm(p => ({ ...p, category: e.target.value }))}>
+                        {pointMccOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
                     </div>
                   </>
                 ) : null}

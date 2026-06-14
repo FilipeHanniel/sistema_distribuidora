@@ -38,6 +38,8 @@ Cada caixa aceita apenas um terminal em modo PDV. Para integrar outra maquininha
 
 No ambiente de teste, informe no assistente o `User ID` numerico exibido nas credenciais de teste da integracao. Ele identifica a conta recebedora usada para criar a loja.
 
+Ao criar o caixa, selecione a categoria MCC de quatro digitos correspondente ao comercio. Para distribuidoras, mercados e conveniencias, o sistema sugere `5411 - Mercados e supermercados`.
+
 ## Testes
 
 O Mercado Pago nao processa cartoes reais em terminais fisicos usando contas de teste. Por isso, quando a conta esta em ambiente de teste, o popup do PDV oferece os cenarios oficiais:

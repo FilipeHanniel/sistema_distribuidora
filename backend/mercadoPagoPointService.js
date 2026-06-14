@@ -1,4 +1,5 @@
 const MERCADO_PAGO_API = 'https://api.mercadopago.com';
+const DEFAULT_POINT_MCC = '5411';
 
 const BRAZILIAN_STATES = [
   'Acre',
@@ -31,6 +32,9 @@ const BRAZILIAN_STATES = [
 ];
 
 const stringifyProviderError = (data, fallback) => {
+  if (data?.code === 'pos_unknown_mcc' || data?.error === 'pos_unknown_mcc') {
+    return 'O Mercado Pago nao reconheceu a categoria comercial selecionada. Escolha outra categoria MCC para o caixa.';
+  }
   if (!data) return fallback;
   const parts = [data.message, data.error, data.code].filter(Boolean);
   for (const item of [...(data.errors || []), ...(data.cause || [])]) {
@@ -88,12 +92,12 @@ const validateStoreInput = (store = {}) => {
 
 const validatePosInput = (pos = {}) => {
   if (!String(pos.name || '').trim()) throw new Error('Informe o nome do caixa.');
-  const category = Number.parseInt(String(pos.category || 621102), 10);
-  if (!Number.isInteger(category) || category <= 0) throw new Error('Categoria MCC invalida.');
+  const categoryText = String(pos.category || DEFAULT_POINT_MCC).trim();
+  if (!/^\d{4}$/.test(categoryText)) throw new Error('A categoria MCC deve possuir exatamente 4 digitos.');
   return {
     name: String(pos.name).trim(),
     externalId: normalizeExternalId(pos.externalId, 'POS', 40),
-    category,
+    category: Number(categoryText),
   };
 };
 
@@ -197,6 +201,7 @@ async function activatePointTerminal({ accessToken, terminalId }) {
 
 module.exports = {
   BRAZILIAN_STATES,
+  DEFAULT_POINT_MCC,
   activatePointTerminal,
   createPointPos,
   createPointStore,
