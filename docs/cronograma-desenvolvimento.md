@@ -14,6 +14,7 @@ Objetivo: garantir que o sistema rode com confianca em ambiente real, sem depend
 - Criar rotina simples de backup automatico diario. [docs/backup-sqlite.md](backup-sqlite.md)
 - Separar claramente dados versionados e dados privados/locais.
 - Testar fluxo completo: venda, pagamento, fiscal fake, comprovante e historico.
+- Invalidar sessoes antigas e impedir cache do frontend apos reinicio/deploy. Concluido em 14/06/2026.
 
 ## Fase 2 - Pagamentos profissionais
 

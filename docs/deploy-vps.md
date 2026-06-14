@@ -35,6 +35,8 @@ pm2 restart sistema-distribuidora
 pm2 save
 ```
 
+Ao reiniciar o backend, as sessoes abertas antes da atualizacao sao invalidadas. Em ate 30 segundos, as abas abertas retornam automaticamente para a tela de login. O `index.html` tambem e servido sem cache para evitar que o navegador continue usando uma interface antiga depois do deploy.
+
 Se tambem houver atualizacao no servidor fake da SEFAZ:
 
 ```bash

@@ -101,7 +101,7 @@ export default function PixSettings() {
       setAccounts(accountsData);
       setProviders(providersData);
     } catch (err) {
-      alert(getApiErrorMessage(err, 'Erro ao carregar contas Pix.'));
+      alert(getApiErrorMessage(err, 'Erro ao carregar contas de recebimento.'));
     } finally {
       setLoading(false);
     }
@@ -305,7 +305,7 @@ export default function PixSettings() {
       setForm({ ...emptyForm });
       loadData();
     } catch (err) {
-      alert(getApiErrorMessage(err, 'Erro ao salvar conta Pix.'));
+      alert(getApiErrorMessage(err, 'Erro ao salvar conta de recebimento.'));
     }
   };
 
@@ -315,7 +315,7 @@ export default function PixSettings() {
       await apiRequest(`/pix/accounts/${account.id}`, { method: 'DELETE' });
       loadData();
     } catch (err) {
-      alert(getApiErrorMessage(err, 'Erro ao remover conta Pix.'));
+      alert(getApiErrorMessage(err, 'Erro ao remover conta de recebimento.'));
     }
   };
 

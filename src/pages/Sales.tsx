@@ -554,10 +554,10 @@ export default function Sales() {
                 </div>
                 {paymentMethod === 'pix' && (
                   <div className="pix-account-select">
-                    <label>Conta Pix recebedora</label>
+                    <label>Conta recebedora</label>
                     <select value={selectedPixAccountId} onChange={e => setSelectedPixAccountId(e.target.value)}>
                       {availablePixAccounts.length === 0 ? (
-                        <option value="">Nenhuma conta Pix ativa</option>
+                        <option value="">Nenhuma conta recebedora ativa</option>
                       ) : availablePixAccounts.map(account => (
                         <option key={account.id} value={account.id}>{account.name}</option>
                       ))}

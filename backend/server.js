@@ -76,6 +76,7 @@ const configuredProcessingTimeout = Number(process.env.PAYMENT_PROCESSING_TIMEOU
 const PAYMENT_PROCESSING_TIMEOUT_MS = Number.isFinite(configuredProcessingTimeout)
   ? Math.max(30000, configuredProcessingTimeout)
   : 120000;
+const SESSION_GENERATION_ID = crypto.randomUUID();
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
@@ -92,7 +93,17 @@ if (NODE_ENV === 'production') {
     next();
   });
   const distPath = path.join(__dirname, '..', 'dist');
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    setHeaders: (res, filePath) => {
+      if (path.basename(filePath) === 'index.html') {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  }));
 }
 
 // ==============================
@@ -146,7 +157,10 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Acesso negado. Token não fornecido.' });
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Token inválido ou expirado.' });
+    if (err) return res.status(401).json({ error: 'Token inválido ou expirado.' });
+    if (user.sessionGenerationId !== SESSION_GENERATION_ID) {
+      return res.status(401).json({ error: 'O sistema foi atualizado. Entre novamente para continuar.' });
+    }
     req.user = user;
     next();
   });
@@ -1143,6 +1157,7 @@ app.post('/api/login', (req, res) => {
       role: user.role,
       name: user.name,
       establishmentId: user.establishmentId || null,
+      sessionGenerationId: SESSION_GENERATION_ID,
     };
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
 
@@ -3072,6 +3087,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', env: NODE_ENV, timestamp: new Date().toISOString() });
 });
 
+app.get('/api/session', authenticateToken, (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Rota da API nao encontrada.' });
 });
@@ -3099,6 +3118,7 @@ setInterval(() => {
 
 if (NODE_ENV === 'production') {
   app.use((req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
   });
 }

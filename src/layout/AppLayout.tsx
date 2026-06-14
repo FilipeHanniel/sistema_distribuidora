@@ -36,7 +36,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/analytics': 'Estatísticas',
   '/users': 'Funcionários',
   '/comprovantes': 'Comprovantes de Venda',
-  '/pix': 'Contas Pix',
+  '/pix': 'Recebimentos',
   '/transactions': 'Transacoes e Conciliacao',
   '/fiscal': 'Fiscal NFC-e',
   '/superadmin': 'Painel Super Admin',
@@ -131,6 +131,16 @@ export default function AppLayout() {
     return () => window.clearInterval(timer);
   }, [gestor, isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated()) return;
+    const validateSession = () => {
+      apiRequest<{ status: string }>('/session').catch(() => undefined);
+    };
+    validateSession();
+    const timer = window.setInterval(validateSession, 30000);
+    return () => window.clearInterval(timer);
+  }, [user?.id, isAuthenticated]);
+
   if (!isAuthenticated()) return <Login />;
 
   // ---- Navegação por perfil ----
@@ -148,7 +158,7 @@ export default function AppLayout() {
       { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
       { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Estatísticas' },
       { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
-      { to: '/pix', icon: <CreditCard size={20} />, label: 'Contas Pix' },
+      { to: '/pix', icon: <CreditCard size={20} />, label: 'Recebimentos' },
       { to: '/transactions', icon: <WalletCards size={20} />, label: 'Transacoes' },
       { to: '/fiscal', icon: <FileText size={20} />, label: 'Fiscal NFC-e' },
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
