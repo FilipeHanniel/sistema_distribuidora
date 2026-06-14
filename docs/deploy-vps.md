@@ -64,7 +64,7 @@ Estes arquivos precisam existir no servidor, mas nao devem ser versionados:
 
 - `.env`
 - `backend/banco.sqlite`
-- `backend/certs/*.pfx`
+- `backend/private/fiscal-certificates/` quando houver certificados A1 enviados pelo painel
 
 ## Quando rodar build
 
@@ -73,7 +73,7 @@ Rode `npm run build` quando houver atualizacao de codigo do frontend/backend via
 Nao precisa rodar build quando mudar apenas:
 
 - `.env`
-- certificado em `backend/certs/`
+- certificado enviado pelo Painel Fiscal
 - dados no banco
 
 Nestes casos, normalmente basta:
@@ -102,15 +102,24 @@ git pull --rebase
 
 ### Certificado A1 nao encontrado
 
-Conferir se existe:
+Certificados novos devem ser enviados pelo Painel Fiscal. Para conferir o armazenamento privado:
 
 ```bash
-ls -la /var/www/sistema_distribuidora/backend/certs
+ls -la /var/www/sistema_distribuidora/backend/private/fiscal-certificates
 ```
 
-No app, o caminho deve ser relativo, sem barra inicial:
+O caminho nao deve ser digitado no app. Se o certificado legado nao estiver disponivel, envie novamente o `.pfx` no Painel Fiscal.
 
-```text
-backend/certs/fake-a1.pfx
+Em producao, mantenha a pasta privada fora de qualquer diretorio servido pelo Nginx e com acesso restrito ao usuario que executa o backend.
+
+Essa pasta nao e versionada pelo Git e nao faz parte do backup isolado do SQLite. Inclua-a futuramente em um backup cifrado ou esteja preparado para solicitar novo envio do certificado ao gestor apos uma restauracao.
+
+A senha do certificado e cifrada usando a chave derivada de `JWT_SECRET`. Nao troque esse segredo em producao sem planejar a recifragem das credenciais armazenadas.
+
+O backend valida arquivos PKCS#12 com OpenSSL no Debian/Ubuntu. Confirme a dependencia:
+
+```bash
+sudo apt install openssl -y
+openssl version
 ```
 

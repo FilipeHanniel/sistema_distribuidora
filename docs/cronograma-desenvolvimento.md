@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 12/06/2026
+Atualizado em: 14/06/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -39,8 +39,8 @@ Objetivo: preparar o caminho profissional para emissao fiscal real.
 - Manter Sefaz Fake para testes internos.
 - Melhorar logs XML de envio e resposta.
 - Exibir rejeicoes fiscais de forma clara para o gestor.
-- Criar upload seguro de certificado A1 no painel Fiscal.
-- Remover dependencia de caminho manual do certificado.
+- Criar upload seguro de certificado A1 no painel Fiscal. Concluido em 14/06/2026.
+- Remover dependencia de caminho manual do certificado. Concluido em 14/06/2026.
 - Validar cadastro fiscal do estabelecimento.
 - Avancar assinatura XML em padrao real.
 - Preparar `SefazGoProvider` para homologacao real quando houver CNPJ/IE/certificado.

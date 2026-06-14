@@ -18,6 +18,9 @@ Este projeto deve tratar a impressao fiscal automatica como emissao de NFC-e mod
 - A impressao automatica so deve acontecer depois da autorizacao da SEFAZ ou dentro de regra formal de contingencia.
 - O comprovante atual continua sendo recibo interno, sem valor fiscal.
 - Segredos fiscais, como CSC e senha do certificado, nao voltam para o frontend e sao armazenados cifrados no backend.
+- O gestor envia o certificado A1 pelo Painel Fiscal. O backend valida formato PKCS#12, senha, chave privada e validade antes de armazenar.
+- Certificados enviados ficam em diretorios privados separados por estabelecimento, com nomes aleatorios e permissoes restritas.
+- Caminhos internos, senha e conteudo do certificado nunca retornam para o frontend.
 
 ## Campos minimos por estabelecimento
 

@@ -215,8 +215,20 @@ export interface FiscalSettings {
   taxRegime: 'mei' | 'simples' | 'normal';
   cscId: string;
   hasCsc: boolean;
-  certificatePath: string;
   hasCertificatePassword: boolean;
+  certificate: {
+    configured: boolean;
+    managed: boolean;
+    fileName: string;
+    fingerprint: string;
+    subject: string;
+    issuer: string;
+    serialNumber: string;
+    validFrom?: string | null;
+    validTo?: string | null;
+    uploadedAt?: string | null;
+    expired: boolean;
+  };
   autoIssueOnPayment: number;
   autoPrintOnAuthorization: number;
   createdAt?: string;

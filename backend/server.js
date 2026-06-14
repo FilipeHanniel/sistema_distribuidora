@@ -10,6 +10,11 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PROVIDERS, getPixProvider, getPointProvider, makeProviderReference } = require('./pixProviders');
 const { getFiscalProvider } = require('./fiscalProviders');
 const { getPaymentTransactionIssue } = require('./paymentReconciliation');
+const {
+  isManagedCertificatePath,
+  removeManagedCertificate,
+  storeFiscalCertificate,
+} = require('./fiscalCertificateService');
 
 const app = express();
 
@@ -493,6 +498,8 @@ const refreshCardTransactionFromProvider = async ({ transaction, userId = null }
 
 const sanitizeFiscalSettings = (settings) => {
   if (!settings) return null;
+  const certificateConfigured = Boolean(settings.certificatePath && settings.certificatePassword);
+  const certificateValidTo = settings.certificateValidTo || null;
   return {
     establishmentId: settings.establishmentId,
     enabled: Number(settings.enabled || 0),
@@ -508,8 +515,20 @@ const sanitizeFiscalSettings = (settings) => {
     taxRegime: settings.taxRegime || 'simples',
     cscId: settings.cscId || '',
     hasCsc: Boolean(settings.csc),
-    certificatePath: settings.certificatePath || '',
     hasCertificatePassword: Boolean(settings.certificatePassword),
+    certificate: {
+      configured: certificateConfigured,
+      managed: isManagedCertificatePath(settings.certificatePath),
+      fileName: settings.certificateFileName || (certificateConfigured ? 'Certificado legado configurado' : ''),
+      fingerprint: settings.certificateFingerprint || '',
+      subject: settings.certificateSubject || '',
+      issuer: settings.certificateIssuer || '',
+      serialNumber: settings.certificateSerialNumber || '',
+      validFrom: settings.certificateValidFrom || null,
+      validTo: certificateValidTo,
+      uploadedAt: settings.certificateUploadedAt || null,
+      expired: Boolean(certificateValidTo && new Date(certificateValidTo) <= new Date()),
+    },
     autoIssueOnPayment: Number(settings.autoIssueOnPayment || 0),
     autoPrintOnAuthorization: Number(settings.autoPrintOnAuthorization || 0),
     createdAt: settings.createdAt,
@@ -541,6 +560,15 @@ const getFiscalReadiness = (settings) => {
   if (!settings?.csc) missing.push('CSC');
   if (!settings?.certificatePath) missing.push('Certificado digital A1');
   if (!settings?.certificatePassword) missing.push('Senha do certificado');
+  if (settings?.certificatePath) {
+    const resolvedCertificatePath = path.isAbsolute(settings.certificatePath)
+      ? settings.certificatePath
+      : path.resolve(__dirname, '..', settings.certificatePath);
+    if (!fs.existsSync(resolvedCertificatePath)) missing.push('Arquivo do certificado A1 nao encontrado');
+  }
+  if (settings?.certificateValidTo && new Date(settings.certificateValidTo) <= new Date()) {
+    missing.push('Certificado A1 expirado');
+  }
   return {
     ready: missing.length === 0,
     missing,
@@ -1337,7 +1365,7 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
 
     const {
       enabled, providerMode, environment, serie, nextNumber, cnpj, stateRegistration, legalName, tradeName,
-      taxRegime, cscId, csc, certificatePath, certificatePassword,
+      taxRegime, cscId, csc,
       autoIssueOnPayment, autoPrintOnAuthorization,
     } = req.body;
 
@@ -1353,7 +1381,7 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
       UPDATE fiscal_settings
       SET enabled = ?, providerMode = ?, environment = ?, documentModel = '65', serie = ?, nextNumber = ?,
           cnpj = ?, stateRegistration = ?, legalName = ?, tradeName = ?, taxRegime = ?,
-          cscId = ?, csc = ?, certificatePath = ?, certificatePassword = ?,
+          cscId = ?, csc = ?,
           autoIssueOnPayment = ?, autoPrintOnAuthorization = ?, updatedAt = ?
       WHERE establishmentId = ?
     `).run(
@@ -1369,8 +1397,6 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
       normalizedTaxRegime,
       cscId || null,
       csc === undefined ? current.csc : (csc ? encodeCredentials({ value: csc }) : null),
-      certificatePath || null,
-      certificatePassword === undefined ? current.certificatePassword : (certificatePassword ? encodeCredentials({ value: certificatePassword }) : null),
       autoIssueOnPayment ? 1 : 0,
       autoPrintOnAuthorization ? 1 : 0,
       now,
@@ -1382,6 +1408,95 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
       settings: sanitizeFiscalSettings(settings),
       readiness: getFiscalReadiness(settings),
       message: 'Configuracao fiscal salva.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
+  let storedCertificate = null;
+  try {
+    const estId = req.user.establishmentId;
+    const { fileName, certificateBase64, password } = req.body || {};
+    ensureFiscalSettings(estId);
+    const current = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+
+    storedCertificate = storeFiscalCertificate({
+      establishmentId: estId,
+      fileName,
+      certificateBase64,
+      password: String(password || ''),
+    });
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE fiscal_settings
+      SET certificatePath = ?, certificatePassword = ?, certificateFileName = ?,
+          certificateFingerprint = ?, certificateSubject = ?, certificateIssuer = ?,
+          certificateSerialNumber = ?, certificateValidFrom = ?, certificateValidTo = ?,
+          certificateUploadedAt = ?, updatedAt = ?
+      WHERE establishmentId = ?
+    `).run(
+      storedCertificate.path,
+      encodeCredentials({ value: String(password) }),
+      storedCertificate.originalFileName,
+      storedCertificate.fileFingerprint,
+      storedCertificate.subject || null,
+      storedCertificate.issuer || null,
+      storedCertificate.serialNumber || null,
+      storedCertificate.validFrom,
+      storedCertificate.validTo,
+      now,
+      now,
+      estId
+    );
+
+    if (current?.certificatePath && current.certificatePath !== storedCertificate.path) {
+      try { removeManagedCertificate(current.certificatePath); } catch (error) {
+        console.warn('[Fiscal Certificate] Certificado anterior nao removido:', error.message);
+      }
+    }
+
+    const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    res.status(201).json({
+      settings: sanitizeFiscalSettings(settings),
+      readiness: getFiscalReadiness(settings),
+      message: 'Certificado A1 validado e armazenado com seguranca.',
+    });
+  } catch (err) {
+    if (storedCertificate?.path) {
+      try { removeManagedCertificate(storedCertificate.path); } catch {}
+    }
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
+  try {
+    const estId = req.user.establishmentId;
+    const current = ensureFiscalSettings(estId);
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE fiscal_settings
+      SET certificatePath = NULL, certificatePassword = NULL, certificateFileName = NULL,
+          certificateFingerprint = NULL, certificateSubject = NULL, certificateIssuer = NULL,
+          certificateSerialNumber = NULL, certificateValidFrom = NULL, certificateValidTo = NULL,
+          certificateUploadedAt = NULL, updatedAt = ?
+      WHERE establishmentId = ?
+    `).run(now, estId);
+
+    if (current.certificatePath) {
+      try { removeManagedCertificate(current.certificatePath); } catch (error) {
+        console.warn('[Fiscal Certificate] Arquivo nao removido:', error.message);
+      }
+    }
+
+    const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    res.json({
+      settings: sanitizeFiscalSettings(settings),
+      readiness: getFiscalReadiness(settings),
+      message: 'Certificado removido.',
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

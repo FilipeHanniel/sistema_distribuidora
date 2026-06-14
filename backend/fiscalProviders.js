@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { buildNfceXml, onlyDigits } = require('./fiscalXmlBuilder');
 const { SefazGoProvider } = require('./sefazGoProvider');
 
@@ -33,7 +35,19 @@ const validateSettings = (settings) => {
   if (!settings?.stateRegistration) errors.push({ code: 'F003', cStat: 'SIM-209', message: 'Inscricao estadual ausente.' });
   if (!settings?.legalName) errors.push({ code: 'F004', cStat: 'SIM-203', message: 'Razao social ausente.' });
   if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F005', cStat: 'SIM-395', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
-  if (!settings?.certificatePath || !settings?.certificatePassword) errors.push({ code: 'F006', cStat: 'SIM-280', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
+  if (!settings?.certificatePath || !settings?.certificatePassword) {
+    errors.push({ code: 'F006', cStat: 'SIM-280', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
+  } else {
+    const certificatePath = path.isAbsolute(settings.certificatePath)
+      ? settings.certificatePath
+      : path.resolve(__dirname, '..', settings.certificatePath);
+    if (!fs.existsSync(certificatePath)) {
+      errors.push({ code: 'F007', cStat: 'SIM-281', message: 'Arquivo do certificado A1 nao encontrado no servidor.' });
+    }
+    if (settings.certificateValidTo && new Date(settings.certificateValidTo) <= new Date()) {
+      errors.push({ code: 'F008', cStat: 'SIM-282', message: 'Certificado A1 expirado.' });
+    }
+  }
   return errors;
 };
 

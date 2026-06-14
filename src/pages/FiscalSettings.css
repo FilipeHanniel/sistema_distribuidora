@@ -115,6 +115,85 @@
   margin: 0.4rem 0 1rem;
 }
 
+.fiscal-certificate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-main);
+}
+
+.fiscal-certificate.configured {
+  border-color: rgba(21, 128, 61, 0.4);
+}
+
+.fiscal-certificate-heading,
+.fiscal-certificate-heading > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.fiscal-certificate-heading {
+  justify-content: space-between;
+}
+
+.fiscal-certificate-heading strong,
+.fiscal-certificate-heading span {
+  display: block;
+}
+
+.fiscal-certificate-heading strong {
+  color: var(--text-primary);
+}
+
+.fiscal-certificate-heading span,
+.fiscal-certificate-upload small {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.fiscal-certificate-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.fiscal-certificate-details span {
+  color: var(--text-secondary);
+  font-size: 0.77rem;
+  overflow-wrap: anywhere;
+}
+
+.fiscal-certificate-details strong {
+  color: var(--text-primary);
+}
+
+.fiscal-certificate-details .legacy {
+  grid-column: 1 / -1;
+  color: #b45309;
+}
+
+.fiscal-certificate-upload {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: end;
+}
+
+.fiscal-certificate-upload .form-group {
+  margin: 0;
+}
+
+.fiscal-certificate-upload small {
+  grid-column: 1 / -1;
+}
+
 .fiscal-doc-list {
   display: flex;
   flex-direction: column;
@@ -256,6 +335,11 @@
 
 @media (max-width: 980px) {
   .fiscal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fiscal-certificate-upload,
+  .fiscal-certificate-details {
     grid-template-columns: 1fr;
   }
 }

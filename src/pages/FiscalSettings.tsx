@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { AlertTriangle, CheckCircle2, FileText, RefreshCw, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileKey2, FileText, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import type { FiscalDocument, FiscalSettings as FiscalSettingsType } from '../types';
 import './FiscalSettings.css';
@@ -24,8 +24,20 @@ const emptySettings: FiscalSettingsType = {
   taxRegime: 'mei',
   cscId: '',
   hasCsc: false,
-  certificatePath: '',
   hasCertificatePassword: false,
+  certificate: {
+    configured: false,
+    managed: false,
+    fileName: '',
+    fingerprint: '',
+    subject: '',
+    issuer: '',
+    serialNumber: '',
+    validFrom: null,
+    validTo: null,
+    uploadedAt: null,
+    expired: false,
+  },
   autoIssueOnPayment: 0,
   autoPrintOnAuthorization: 0,
 };
@@ -55,14 +67,32 @@ function parseValidationMessages(value?: string): FiscalValidationMessage[] {
   }
 }
 
+const readFileAsBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = String(reader.result || '');
+    resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result);
+  };
+  reader.onerror = () => reject(new Error('Nao foi possivel ler o certificado selecionado.'));
+  reader.readAsDataURL(file);
+});
+
+const formatCertificateDate = (value?: string | null) => (
+  value ? new Date(value).toLocaleString('pt-BR') : 'Nao informado'
+);
+
 export default function FiscalSettings() {
   const [form, setForm] = useState(emptySettings);
   const [csc, setCsc] = useState('');
+  const [certificateFile, setCertificateFile] = useState<File | null>(null);
+  const [certificateInputKey, setCertificateInputKey] = useState(0);
   const [certificatePassword, setCertificatePassword] = useState('');
   const [readiness, setReadiness] = useState<FiscalResponse['readiness']>({ ready: false, missing: [] });
   const [documents, setDocuments] = useState<FiscalDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingCertificate, setUploadingCertificate] = useState(false);
+  const [removingCertificate, setRemovingCertificate] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | FiscalDocument['status']>('all');
 
   const loadData = async () => {
@@ -76,6 +106,8 @@ export default function FiscalSettings() {
       setReadiness(settingsData.readiness);
       setDocuments(documentsData);
       setCsc('');
+      setCertificateFile(null);
+      setCertificateInputKey(value => value + 1);
       setCertificatePassword('');
     } catch (err) {
       alert(getApiErrorMessage(err, 'Erro ao carregar modulo fiscal.'));
@@ -97,8 +129,6 @@ export default function FiscalSettings() {
         autoPrintOnAuthorization: Boolean(form.autoPrintOnAuthorization),
       };
       if (csc) payload.csc = csc;
-      if (certificatePassword) payload.certificatePassword = certificatePassword;
-
       const updated = await apiRequest<FiscalResponse>('/fiscal/settings', {
         method: 'PUT',
         body: payload,
@@ -106,12 +136,66 @@ export default function FiscalSettings() {
       setForm(updated.settings);
       setReadiness(updated.readiness);
       setCsc('');
-      setCertificatePassword('');
       alert('Configuracao fiscal salva.');
     } catch (err) {
       alert(getApiErrorMessage(err, 'Erro ao salvar configuracao fiscal.'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const uploadCertificate = async () => {
+    if (!certificateFile) {
+      alert('Selecione um arquivo .pfx ou .p12.');
+      return;
+    }
+    if (!certificatePassword) {
+      alert('Informe a senha do certificado.');
+      return;
+    }
+    if (certificateFile.size > 512 * 1024) {
+      alert('O certificado excede o limite de 512 KB.');
+      return;
+    }
+
+    setUploadingCertificate(true);
+    try {
+      const certificateBase64 = await readFileAsBase64(certificateFile);
+      const updated = await apiRequest<FiscalResponse>('/fiscal/certificate', {
+        method: 'POST',
+        body: {
+          fileName: certificateFile.name,
+          certificateBase64,
+          password: certificatePassword,
+        },
+      });
+      setForm(updated.settings);
+      setReadiness(updated.readiness);
+      setCertificateFile(null);
+      setCertificateInputKey(value => value + 1);
+      setCertificatePassword('');
+      alert('Certificado A1 validado e armazenado com seguranca.');
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao enviar certificado A1.'));
+    } finally {
+      setUploadingCertificate(false);
+    }
+  };
+
+  const removeCertificate = async () => {
+    if (!confirm('Remover o certificado A1 deste estabelecimento? A emissao fiscal ficara indisponivel ate um novo envio.')) return;
+    setRemovingCertificate(true);
+    try {
+      const updated = await apiRequest<FiscalResponse>('/fiscal/certificate', { method: 'DELETE' });
+      setForm(updated.settings);
+      setReadiness(updated.readiness);
+      setCertificateFile(null);
+      setCertificateInputKey(value => value + 1);
+      setCertificatePassword('');
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao remover certificado A1.'));
+    } finally {
+      setRemovingCertificate(false);
     }
   };
 
@@ -259,14 +343,68 @@ export default function FiscalSettings() {
               </div>
             </div>
 
-            <div className="form-group">
-              <label>Caminho do certificado A1 no servidor *</label>
-              <input className="form-control" value={form.certificatePath} onChange={e => update('certificatePath', e.target.value)} placeholder="/var/www/sistema_distribuidora/certs/empresa.pfx" />
-            </div>
+            <div className={`fiscal-certificate ${form.certificate.configured ? 'configured' : ''}`}>
+              <div className="fiscal-certificate-heading">
+                <div>
+                  <FileKey2 size={18} />
+                  <div>
+                    <strong>Certificado digital A1</strong>
+                    <span>
+                      {form.certificate.configured
+                        ? form.certificate.fileName
+                        : 'Nenhum certificado cadastrado'}
+                    </span>
+                  </div>
+                </div>
+                {form.certificate.configured && (
+                  <button type="button" className="btn btn-danger btn-sm" disabled={removingCertificate} onClick={removeCertificate}>
+                    <Trash2 size={14} /> {removingCertificate ? 'Removendo...' : 'Remover'}
+                  </button>
+                )}
+              </div>
 
-            <div className="form-group">
-              <label>Senha do certificado {form.hasCertificatePassword ? '(ja cadastrada)' : '*'}</label>
-              <input className="form-control" type="password" value={certificatePassword} onChange={e => setCertificatePassword(e.target.value)} placeholder={form.hasCertificatePassword ? 'Preencha apenas para trocar' : 'Senha do arquivo .pfx'} />
+              {form.certificate.configured && (
+                <div className="fiscal-certificate-details">
+                  <span>Valido de <strong>{formatCertificateDate(form.certificate.validFrom)}</strong></span>
+                  <span>Valido ate <strong>{formatCertificateDate(form.certificate.validTo)}</strong></span>
+                  {form.certificate.subject && <span>Emitido para <strong>{form.certificate.subject}</strong></span>}
+                  {form.certificate.fingerprint && <span>Identificador <strong>{form.certificate.fingerprint.slice(0, 16)}...</strong></span>}
+                  {!form.certificate.managed && <span className="legacy">Certificado legado: envie novamente para migrar ao armazenamento seguro.</span>}
+                </div>
+              )}
+
+              <div className="fiscal-certificate-upload">
+                <div className="form-group">
+                  <label>{form.certificate.configured ? 'Substituir arquivo A1' : 'Arquivo A1 *'}</label>
+                  <input
+                    key={certificateInputKey}
+                    className="form-control"
+                    type="file"
+                    accept=".pfx,.p12,application/x-pkcs12"
+                    onChange={e => setCertificateFile(e.target.files?.[0] || null)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Senha do arquivo *</label>
+                  <input
+                    className="form-control"
+                    type="password"
+                    value={certificatePassword}
+                    onChange={e => setCertificatePassword(e.target.value)}
+                    placeholder="Senha do arquivo .pfx ou .p12"
+                    autoComplete="new-password"
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={uploadingCertificate || !certificateFile || !certificatePassword}
+                  onClick={uploadCertificate}
+                >
+                  <Upload size={15} /> {uploadingCertificate ? 'Validando...' : form.certificate.configured ? 'Validar e substituir' : 'Validar e enviar'}
+                </button>
+                <small>Em producao, o arquivo e a senha sao enviados ao backend por HTTPS. Limite: 512 KB.</small>
+              </div>
             </div>
 
             <label className="fiscal-toggle">
