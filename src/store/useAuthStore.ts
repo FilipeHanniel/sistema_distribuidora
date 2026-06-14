@@ -2,6 +2,11 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { UserRole } from '../types';
 
+const AUTH_STORAGE_KEY = 'distribuidora-auth-storage';
+
+// Remove a sessao criada por versoes antigas, que permanecia ativa apos fechar a aba.
+localStorage.removeItem(AUTH_STORAGE_KEY);
+
 interface AuthUser {
   id: string;
   username: string;
@@ -36,8 +41,8 @@ export const useAuthStore = create<AuthState>()(
       isOperador: () => get().user?.role === 'operador',
     }),
     {
-      name: 'distribuidora-auth-storage',
-      storage: createJSONStorage(() => localStorage),
+      name: AUTH_STORAGE_KEY,
+      storage: createJSONStorage(() => sessionStorage),
     }
   )
 );

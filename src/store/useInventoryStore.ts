@@ -4,6 +4,7 @@ import { apiRequest, getApiErrorMessage } from '../lib/api';
 
 interface InventoryState {
   products: Product[];
+  clearProducts: () => void;
   fetchProducts: () => Promise<void>;
   addProduct: (productInfo: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateProduct: (id: string, updates: Partial<Omit<Product, 'id' | 'createdAt' | 'updatedAt'>>) => Promise<void>;
@@ -13,6 +14,7 @@ interface InventoryState {
 
 export const useInventoryStore = create<InventoryState>((set, get) => ({
   products: [],
+  clearProducts: () => set({ products: [] }),
   
   fetchProducts: async () => {
     try {

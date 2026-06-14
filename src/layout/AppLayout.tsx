@@ -47,10 +47,10 @@ function TopbarTitle() {
 }
 
 export default function AppLayout() {
-  const { fetchProducts } = useInventoryStore();
-  const { fetchSales } = useSalesStore();
+  const { fetchProducts, clearProducts } = useInventoryStore();
+  const { fetchSales, clearSalesSession } = useSalesStore();
   const { user, logout, isAuthenticated, isSuperAdmin, isGestor, isOperador } = useAuthStore();
-  const { fetchUsers } = useUserStore();
+  const { fetchUsers, clearUsers } = useUserStore();
   const { lastSale, showSuccessPopup, closeSuccessPopup } = useSalesStore();
 
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -67,16 +67,32 @@ export default function AppLayout() {
   const operador = isOperador();
 
   useEffect(() => {
-    if (isAuthenticated()) {
-      if (!superAdmin) {
-        fetchProducts();
-        if (gestor) {
-          fetchSales();
-          fetchUsers();
-        }
+    clearProducts();
+    clearSalesSession();
+    clearUsers();
+    setNotifications([]);
+
+    if (!isAuthenticated()) return;
+
+    if (!superAdmin) {
+      fetchProducts();
+      if (gestor) {
+        fetchSales();
+        fetchUsers();
       }
     }
-  }, [fetchProducts, fetchSales, fetchUsers, isAuthenticated, superAdmin, gestor]);
+  }, [
+    user?.id,
+    fetchProducts,
+    clearProducts,
+    fetchSales,
+    clearSalesSession,
+    fetchUsers,
+    clearUsers,
+    isAuthenticated,
+    superAdmin,
+    gestor,
+  ]);
 
   useEffect(() => {
     if (isDark) {
@@ -159,6 +175,14 @@ export default function AppLayout() {
     setNotifications(prev => prev.map(n => ({ ...n, readAt: n.readAt || now })));
   };
 
+  const handleLogout = () => {
+    clearProducts();
+    clearSalesSession();
+    clearUsers();
+    setNotifications([]);
+    logout();
+  };
+
   return (
     <BrowserRouter>
       <div className="app-layout">
@@ -225,7 +249,7 @@ export default function AppLayout() {
             <button className="theme-toggle" onClick={() => setIsDark(!isDark)}>
               {isDark ? <><Sun size={16} /> Modo Claro</> : <><Moon size={16} /> Modo Escuro</>}
             </button>
-            <button className="logout-btn" onClick={logout}>
+            <button className="logout-btn" onClick={handleLogout}>
               <LogOut size={16} /> Sair do Sistema
             </button>
           </div>
@@ -305,7 +329,7 @@ export default function AppLayout() {
                     <button onClick={() => { setIsPasswordModalOpen(true); setIsUserMenuOpen(false); }}>
                       <KeyRound size={16} /> Alterar Senha
                     </button>
-                    <button onClick={logout} className="logout-item">
+                    <button onClick={handleLogout} className="logout-item">
                       <LogOut size={16} /> Sair do Sistema
                     </button>
                   </div>

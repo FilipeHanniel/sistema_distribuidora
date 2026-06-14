@@ -19,6 +19,7 @@ interface SalesState {
   lastSale: LastSale | null;
   showSuccessPopup: boolean;
   pendingPixItems: Record<string, SaleItem[]>;
+  clearSalesSession: () => void;
   fetchSales: () => Promise<void>;
   addSale: (items: SaleItem[], totalAmount: number, paymentMethod: string) => Promise<string | undefined>;
   createPixPayment: (items: SaleItem[], totalAmount: number, pixAccountId?: string, deviceId?: string) => Promise<PixTransaction | undefined>;
@@ -36,6 +37,12 @@ export const useSalesStore = create<SalesState>((set, get) => ({
   lastSale: null,
   showSuccessPopup: false,
   pendingPixItems: {},
+  clearSalesSession: () => set({
+    sales: [],
+    lastSale: null,
+    showSuccessPopup: false,
+    pendingPixItems: {},
+  }),
 
   triggerSuccessPopup: (id, amount, method, items, fiscalDocument = null) => {
     set({ lastSale: { id, amount, method, items, fiscalDocument, createdAt: new Date().toISOString() }, showSuccessPopup: true });

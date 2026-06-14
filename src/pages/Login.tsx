@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { User, Lock, AlertCircle } from 'lucide-react';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
@@ -10,6 +10,12 @@ export default function Login() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const loginStore = useAuthStore();
+
+  useEffect(() => {
+    if (window.location.pathname !== '/') {
+      window.history.replaceState(null, '', '/');
+    }
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

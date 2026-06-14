@@ -11,6 +11,7 @@ type UserPayload = {
 
 interface UserState {
   users: User[];
+  clearUsers: () => void;
   fetchUsers: () => Promise<void>;
   createUser: (userInfo: UserPayload) => Promise<boolean>;
   updateUser: (id: string, updates: UserPayload) => Promise<boolean>;
@@ -21,6 +22,7 @@ interface UserState {
 
 export const useUserStore = create<UserState>((set, get) => ({
   users: [],
+  clearUsers: () => set({ users: [] }),
 
   fetchUsers: async () => {
     try {
