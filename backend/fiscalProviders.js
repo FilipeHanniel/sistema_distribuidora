@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { buildNfceXml, onlyDigits } = require('./fiscalXmlBuilder');
+const { signXmlWithPfx } = require('./fiscalXmlSigner');
 const { SefazGoProvider } = require('./sefazGoProvider');
 
 const makeAccessKey = (settings, document, sale) => {
@@ -105,7 +106,12 @@ class FakeSefazProvider {
     const accessKey = makeAccessKey(settings, document, sale);
     const protocol = `SIM${Date.now()}`;
     const qrCodeUrl = `https://homolog.sefaz.go.gov.br/nfce/qrcode?p=${accessKey}|2|${settings.environment}|${settings.cscId}`;
-    const xml = buildNfceXml({ settings, document, sale, items, accessKey, protocol, qrCodeUrl });
+    const unsignedXml = buildNfceXml({ settings, document, sale, items, accessKey, protocol, qrCodeUrl });
+    const signed = signXmlWithPfx({
+      xml: unsignedXml,
+      certificatePath: settings.certificatePath,
+      password: settings.certificatePassword,
+    });
 
     return {
       status: 'authorized',
@@ -114,7 +120,7 @@ class FakeSefazProvider {
       accessKey,
       protocol,
       qrCodeUrl,
-      xml,
+      xml: signed.xml,
       validationMessages: [],
     };
   }

@@ -70,11 +70,24 @@ Ele nao substitui a homologacao oficial. Serve para deixar o produto pronto ante
 
 - `fiscalProviders.js`: escolhe o provedor fiscal atual e contem o simulador.
 - `fiscalXmlBuilder.js`: monta a estrutura XML NFC-e base.
+- `fiscalXmlSigner.js`: assina o `infNFe` com certificado A1 em XMLDSig, usando `SignedInfo`, `DigestValue`, `SignatureValue` e `X509Certificate`.
 - Futuro `SefazGoProvider`: deve assinar XML, validar schema, enviar para webservice, consultar recibo/protocolo, tratar rejeicoes reais e gravar XML autorizado.
+
+## Assinatura XML
+
+O sistema ja possui uma primeira assinatura XML em padrao XMLDSig para NFC-e:
+
+- referencia o `infNFe` por `URI="#NFe..."`;
+- calcula `DigestValue` com SHA-1 sobre o `infNFe` canonicalizado;
+- assina o `SignedInfo` com RSA-SHA1 usando a chave privada do certificado A1;
+- inclui o certificado X.509 em `KeyInfo/X509Data`;
+- impede nova assinatura quando o XML ja possui `<Signature>`.
+
+No Windows, a assinatura usa PowerShell/.NET para acessar o PFX. No Linux/VPS, usa OpenSSL para extrair chave/certificado e `crypto` do Node para assinar. Essa etapa ainda nao substitui a validacao por schemas nem o envio oficial ao webservice da SEFAZ.
 
 ## Proximas etapas tecnicas
 
-1. Escolher biblioteca/motor para assinar XML NFC-e com certificado A1 e validar schemas.
+1. Validar XML por schemas oficiais antes do envio.
 2. Mapear campos fiscais dos produtos: NCM, CFOP, CSOSN/CST, unidade, origem, aliquotas e beneficios fiscais quando aplicavel.
 3. Implementar webservices de autorizacao, consulta, cancelamento, inutilizacao e contingencia conforme ambiente GO.
 4. Gerar DANFE NFC-e e QR Code conforme manual nacional.

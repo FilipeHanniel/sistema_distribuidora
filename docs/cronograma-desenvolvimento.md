@@ -46,7 +46,7 @@ Objetivo: preparar o caminho profissional para emissao fiscal real.
 - Criar upload seguro de certificado A1 no painel Fiscal. Concluido em 14/06/2026.
 - Remover dependencia de caminho manual do certificado. Concluido em 14/06/2026.
 - Validar cadastro fiscal do estabelecimento. Concluido em 16/06/2026.
-- Avancar assinatura XML em padrao real.
+- Avancar assinatura XML em padrao real. Concluido em 16/06/2026 com XMLDSig inicial.
 - Preparar `SefazGoProvider` para homologacao real quando houver CNPJ/IE/certificado.
 
 ## Fase 4 - Produto SaaS e multiempresa
@@ -120,7 +120,7 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 3 - Fiscal NFC-e, mantendo a Fase 2 apenas com pendencias externas/controladas:
 
-1. Evoluir assinatura XML e validacao por schemas antes de qualquer tentativa real com Sefaz.
+1. Validar XML por schemas oficiais antes de qualquer tentativa real com Sefaz.
 2. Criar testes automatizados de venda duplicada, falha fiscal e certificado invalido.
 3. Preparar `SefazGoProvider` para homologacao real quando houver CNPJ/IE/certificado de empresa.
 4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.

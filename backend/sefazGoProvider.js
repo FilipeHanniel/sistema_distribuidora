@@ -3,9 +3,8 @@ const https = require('https');
 const { URL } = require('url');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { spawnSync } = require('child_process');
 const { buildNfceXml } = require('./fiscalXmlBuilder');
+const { signXmlWithPfx } = require('./fiscalXmlSigner');
 
 const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
 
@@ -100,7 +99,11 @@ class SefazGoProvider {
       qrCodeUrl,
     });
 
-    const signedXml = this.signXmlPlaceholder(unsignedXml, certificate);
+    const signedXml = signXmlWithPfx({
+      xml: unsignedXml,
+      certificatePath: certificate.path,
+      password: certificate.password,
+    }).xml;
     const responseXml = await postXml(`${this.baseUrl}/nfce/autorizacao`, makeSoapEnvelope(signedXml));
     return this.parseAuthorizationResponse({ responseXml, signedXml, accessKey, qrCodeUrl });
   }
@@ -117,69 +120,10 @@ class SefazGoProvider {
       throw new Error(`Certificado A1 nao encontrado em: ${resolvedPath}`);
     }
 
-    const pfx = fs.readFileSync(resolvedPath);
-    this.assertPfxPassword(resolvedPath, password);
     return {
       path: resolvedPath,
       password,
-      fingerprint: crypto.createHash('sha256').update(pfx).digest('hex'),
     };
-  }
-
-  signXmlPlaceholder(xml, certificate) {
-    const signatureSeed = this.signWithCertificate(xml, certificate);
-    return xml.replace(
-      '</NFe>',
-      `<Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo>ASSINATURA_A1_FAKE</SignedInfo><SignatureValue>${signatureSeed}</SignatureValue></Signature></NFe>`
-    );
-  }
-
-  assertPfxPassword(certPath, password) {
-    if (process.platform === 'win32') {
-      const script = `
-        $ErrorActionPreference = 'Stop'
-        $pwd = ConvertTo-SecureString -String ${JSON.stringify(password)} -AsPlainText -Force
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(${JSON.stringify(certPath)}, $pwd, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-        if (-not $cert.HasPrivateKey) { throw 'Certificado sem chave privada.' }
-        Write-Output $cert.Thumbprint
-      `;
-      const result = spawnSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8', windowsHide: true });
-      if (result.status !== 0) {
-        throw new Error(`Falha ao abrir certificado A1. Verifique arquivo e senha. ${(result.stderr || result.stdout).trim()}`);
-      }
-      return;
-    }
-
-    const result = spawnSync('openssl', ['pkcs12', '-in', certPath, '-nokeys', '-passin', `pass:${password}`], {
-      encoding: 'utf8',
-    });
-    if (result.status !== 0) {
-      throw new Error(`Falha ao abrir certificado A1. Verifique arquivo e senha. ${(result.stderr || result.stdout).trim()}`);
-    }
-  }
-
-  signWithCertificate(xml, certificate) {
-    if (process.platform === 'win32') {
-      const xmlBase64 = Buffer.from(xml, 'utf8').toString('base64');
-      const script = `
-        $ErrorActionPreference = 'Stop'
-        $pwd = ConvertTo-SecureString -String ${JSON.stringify(certificate.password)} -AsPlainText -Force
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(${JSON.stringify(certificate.path)}, $pwd, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-        $rsa = $cert.PrivateKey
-        if ($null -eq $rsa) { throw 'Chave privada RSA nao encontrada.' }
-        $data = [Convert]::FromBase64String(${JSON.stringify(xmlBase64)})
-        $sig = $rsa.SignData($data, [System.Security.Cryptography.CryptoConfig]::MapNameToOID('SHA1'))
-        [Convert]::ToBase64String($sig)
-      `;
-      const result = spawnSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8', windowsHide: true });
-      if (result.status !== 0) {
-        throw new Error(`Falha ao assinar XML com A1 fake. ${(result.stderr || result.stdout).trim()}`);
-      }
-      return result.stdout.trim();
-    }
-
-    const digest = crypto.createHash('sha256').update(`${certificate.fingerprint}:${xml}`).digest('base64');
-    return digest;
   }
 
   parseAuthorizationResponse({ responseXml, signedXml, accessKey, qrCodeUrl }) {
