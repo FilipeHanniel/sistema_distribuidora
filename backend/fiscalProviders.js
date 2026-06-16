@@ -34,18 +34,30 @@ const validateSettings = (settings) => {
   if (onlyDigits(settings?.cnpj).length !== 14) errors.push({ code: 'F002', cStat: 'SIM-207', message: 'CNPJ do emitente invalido ou ausente.' });
   if (!settings?.stateRegistration) errors.push({ code: 'F003', cStat: 'SIM-209', message: 'Inscricao estadual ausente.' });
   if (!settings?.legalName) errors.push({ code: 'F004', cStat: 'SIM-203', message: 'Razao social ausente.' });
-  if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F005', cStat: 'SIM-395', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
+  if (!['1', '2', '3', '4'].includes(String(settings?.crt || '').trim())) {
+    errors.push({ code: 'F005', cStat: 'SIM-481', message: 'CRT do emitente invalido ou ausente.' });
+  }
+  if (!settings?.streetName || !settings?.streetNumber || !settings?.district) {
+    errors.push({ code: 'F006', cStat: 'SIM-203', message: 'Endereco fiscal do emitente incompleto.' });
+  }
+  if (!settings?.cityName || onlyDigits(settings?.cityCode).length !== 7 || !String(settings?.state || '').match(/^[A-Z]{2}$/)) {
+    errors.push({ code: 'F007', cStat: 'SIM-203', message: 'Municipio, codigo IBGE ou UF do emitente invalidos.' });
+  }
+  if (onlyDigits(settings?.zipCode).length !== 8) {
+    errors.push({ code: 'F008', cStat: 'SIM-203', message: 'CEP do emitente invalido ou ausente.' });
+  }
+  if (!settings?.cscId || !settings?.csc) errors.push({ code: 'F009', cStat: 'SIM-395', message: 'CSC e ID CSC sao obrigatorios para NFC-e.' });
   if (!settings?.certificatePath || !settings?.certificatePassword) {
-    errors.push({ code: 'F006', cStat: 'SIM-280', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
+    errors.push({ code: 'F010', cStat: 'SIM-280', message: 'Certificado A1 e senha sao obrigatorios para homologacao/producao.' });
   } else {
     const certificatePath = path.isAbsolute(settings.certificatePath)
       ? settings.certificatePath
       : path.resolve(__dirname, '..', settings.certificatePath);
     if (!fs.existsSync(certificatePath)) {
-      errors.push({ code: 'F007', cStat: 'SIM-281', message: 'Arquivo do certificado A1 nao encontrado no servidor.' });
+      errors.push({ code: 'F011', cStat: 'SIM-281', message: 'Arquivo do certificado A1 nao encontrado no servidor.' });
     }
     if (settings.certificateValidTo && new Date(settings.certificateValidTo) <= new Date()) {
-      errors.push({ code: 'F008', cStat: 'SIM-282', message: 'Certificado A1 expirado.' });
+      errors.push({ code: 'F012', cStat: 'SIM-282', message: 'Certificado A1 expirado.' });
     }
   }
   return errors;

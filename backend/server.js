@@ -22,6 +22,11 @@ const {
   storeFiscalCertificate,
 } = require('./fiscalCertificateService');
 const {
+  getFiscalReadiness,
+  normalizeCrt,
+  onlyDigits: onlyFiscalDigits,
+} = require('./fiscalReadiness');
+const {
   activatePointTerminal,
   createPointPos,
   createPointStore,
@@ -628,6 +633,15 @@ const sanitizeFiscalSettings = (settings) => {
     legalName: settings.legalName || '',
     tradeName: settings.tradeName || '',
     taxRegime: settings.taxRegime || 'simples',
+    crt: normalizeCrt(settings.taxRegime || 'simples', settings.crt),
+    streetName: settings.streetName || '',
+    streetNumber: settings.streetNumber || '',
+    district: settings.district || '',
+    cityName: settings.cityName || '',
+    cityCode: settings.cityCode || '',
+    state: settings.state || 'GO',
+    zipCode: settings.zipCode || '',
+    complement: settings.complement || '',
     cscId: settings.cscId || '',
     hasCsc: Boolean(settings.csc),
     hasCertificatePassword: Boolean(settings.certificatePassword),
@@ -659,35 +673,10 @@ const ensureFiscalSettings = (estId) => {
   db.prepare(`
     INSERT INTO fiscal_settings (
       establishmentId, enabled, providerMode, environment, documentModel, serie, nextNumber,
-      taxRegime, autoIssueOnPayment, autoPrintOnAuthorization, createdAt, updatedAt
-    ) VALUES (?, 0, 'simulated', 'homologation', '65', '1', 1, 'simples', 0, 0, ?, ?)
+      taxRegime, crt, cityName, cityCode, state, autoIssueOnPayment, autoPrintOnAuthorization, createdAt, updatedAt
+    ) VALUES (?, 0, 'simulated', 'homologation', '65', '1', 1, 'simples', '1', 'Goiania', '5208707', 'GO', 0, 0, ?, ?)
   `).run(estId, now, now);
   return db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
-};
-
-const getFiscalReadiness = (settings) => {
-  const missing = [];
-  if (!settings?.enabled) missing.push('Modulo fiscal desativado');
-  if (!settings?.cnpj) missing.push('CNPJ');
-  if (!settings?.stateRegistration) missing.push('Inscricao estadual');
-  if (!settings?.legalName) missing.push('Razao social');
-  if (!settings?.cscId) missing.push('ID CSC');
-  if (!settings?.csc) missing.push('CSC');
-  if (!settings?.certificatePath) missing.push('Certificado digital A1');
-  if (!settings?.certificatePassword) missing.push('Senha do certificado');
-  if (settings?.certificatePath) {
-    const resolvedCertificatePath = path.isAbsolute(settings.certificatePath)
-      ? settings.certificatePath
-      : path.resolve(__dirname, '..', settings.certificatePath);
-    if (!fs.existsSync(resolvedCertificatePath)) missing.push('Arquivo do certificado A1 nao encontrado');
-  }
-  if (settings?.certificateValidTo && new Date(settings.certificateValidTo) <= new Date()) {
-    missing.push('Certificado A1 expirado');
-  }
-  return {
-    ready: missing.length === 0,
-    missing,
-  };
 };
 
 const upsertFiscalDocumentForSale = (saleId, estId, options = {}) => {
@@ -1481,15 +1470,19 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
 
     const {
       enabled, providerMode, environment, serie, nextNumber, cnpj, stateRegistration, legalName, tradeName,
-      taxRegime, cscId, csc,
+      taxRegime, crt, streetName, streetNumber, district, cityName, cityCode, state, zipCode, complement, cscId, csc,
       autoIssueOnPayment, autoPrintOnAuthorization,
     } = req.body;
 
     const normalizedEnvironment = environment === 'production' ? 'production' : 'homologation';
     const normalizedProviderMode = providerMode === 'sefaz_go' ? 'sefaz_go' : 'simulated';
     const normalizedTaxRegime = ['mei', 'simples', 'normal'].includes(taxRegime) ? taxRegime : 'simples';
+    const normalizedCrt = normalizeCrt(normalizedTaxRegime, crt);
     const safeSerie = String(serie || '1').trim();
     const safeNextNumber = Math.max(1, Number.parseInt(nextNumber, 10) || 1);
+    const safeState = String(state || 'GO').trim().toUpperCase().slice(0, 2);
+    const safeCityCode = onlyFiscalDigits(cityCode).slice(0, 7);
+    const safeZipCode = onlyFiscalDigits(zipCode).slice(0, 8);
     const now = new Date().toISOString();
     const current = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
 
@@ -1497,6 +1490,8 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
       UPDATE fiscal_settings
       SET enabled = ?, providerMode = ?, environment = ?, documentModel = '65', serie = ?, nextNumber = ?,
           cnpj = ?, stateRegistration = ?, legalName = ?, tradeName = ?, taxRegime = ?,
+          crt = ?, streetName = ?, streetNumber = ?, district = ?, cityName = ?, cityCode = ?,
+          state = ?, zipCode = ?, complement = ?,
           cscId = ?, csc = ?,
           autoIssueOnPayment = ?, autoPrintOnAuthorization = ?, updatedAt = ?
       WHERE establishmentId = ?
@@ -1511,6 +1506,15 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
       legalName || null,
       tradeName || null,
       normalizedTaxRegime,
+      normalizedCrt,
+      streetName || null,
+      streetNumber || null,
+      district || null,
+      cityName || null,
+      safeCityCode || null,
+      safeState || null,
+      safeZipCode || null,
+      complement || null,
       cscId || null,
       csc === undefined ? current.csc : (csc ? encodeCredentials({ value: csc }) : null),
       autoIssueOnPayment ? 1 : 0,

@@ -238,6 +238,15 @@ export interface FiscalSettings {
   legalName: string;
   tradeName: string;
   taxRegime: 'mei' | 'simples' | 'normal';
+  crt: '1' | '2' | '3' | '4';
+  streetName: string;
+  streetNumber: string;
+  district: string;
+  cityName: string;
+  cityCode: string;
+  state: string;
+  zipCode: string;
+  complement: string;
   cscId: string;
   hasCsc: boolean;
   hasCertificatePassword: boolean;

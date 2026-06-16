@@ -27,13 +27,27 @@ Este projeto deve tratar a impressao fiscal automatica como emissao de NFC-e mod
 - CNPJ do emitente.
 - Inscricao estadual.
 - Razao social e nome fantasia.
+- Endereco fiscal completo do emitente: logradouro, numero, bairro, municipio, codigo IBGE, UF e CEP.
 - Ambiente: homologacao ou producao.
 - Modelo: NFC-e 65.
 - Serie e proxima numeracao.
-- Regime tributario.
+- Regime tributario e CRT.
 - ID CSC e CSC.
 - Certificado digital A1 e senha no servidor.
 - Flags para emitir apos pagamento confirmado e imprimir apos autorizacao.
+
+## Validacao do cadastro fiscal
+
+O Painel Fiscal exibe um checklist de prontidao por estabelecimento. Quando o modulo fiscal esta desativado, o sistema trata o estabelecimento como controle interno: vendas, estoque e comprovantes seguem funcionando sem tentar emitir documento fiscal.
+
+Quando o modulo fiscal esta ativo, o backend valida os seguintes grupos antes de preparar emissao:
+
+- Emitente: CNPJ, razao social, inscricao estadual e regime tributario.
+- Endereco fiscal: logradouro, numero, bairro, municipio, codigo IBGE, UF e CEP.
+- NFC-e: serie, proxima numeracao, ID CSC e CSC.
+- Certificado: A1 armazenado no diretorio privado, senha cifrada e validade do certificado.
+
+Essa validacao nao substitui a homologacao oficial. Ela serve para impedir erros obvios antes de evoluir para assinatura XML, schemas e webservices da SEFAZ.
 
 ## Campos fiscais minimos por produto
 

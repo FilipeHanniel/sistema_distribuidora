@@ -21,6 +21,10 @@ const buildNfceXml = ({ settings, document, sale, items, accessKey, protocol, qr
   const issueDate = new Date(sale.createdAt || Date.now()).toISOString();
   const serie = document.serie || '1';
   const number = document.number || 1;
+  const cityCode = onlyDigits(settings.cityCode) || '5208707';
+  const state = String(settings.state || 'GO').toUpperCase().slice(0, 2);
+  const zipCode = onlyDigits(settings.zipCode);
+  const crt = String(settings.crt || (settings.taxRegime === 'normal' ? '3' : settings.taxRegime === 'mei' ? '4' : '1'));
 
   const itemXml = items.map((item, index) => {
     const quantity = Number(item.quantity || 0);
@@ -72,7 +76,7 @@ const buildNfceXml = ({ settings, document, sale, items, accessKey, protocol, qr
     `      <dhEmi>${issueDate}</dhEmi>`,
     '      <tpNF>1</tpNF>',
     '      <idDest>1</idDest>',
-    '      <cMunFG>5208707</cMunFG>',
+    `      <cMunFG>${cityCode}</cMunFG>`,
     '      <tpImp>4</tpImp>',
     '      <tpEmis>1</tpEmis>',
     `      <cDV>${accessKey.slice(-1)}</cDV>`,
@@ -87,8 +91,20 @@ const buildNfceXml = ({ settings, document, sale, items, accessKey, protocol, qr
     `      <CNPJ>${onlyDigits(settings.cnpj)}</CNPJ>`,
     `      <xNome>${escapeXml(settings.legalName)}</xNome>`,
     `      <xFant>${escapeXml(settings.tradeName || settings.legalName)}</xFant>`,
+    '      <enderEmit>',
+    `        <xLgr>${escapeXml(settings.streetName)}</xLgr>`,
+    `        <nro>${escapeXml(settings.streetNumber)}</nro>`,
+    settings.complement ? `        <xCpl>${escapeXml(settings.complement)}</xCpl>` : '',
+    `        <xBairro>${escapeXml(settings.district)}</xBairro>`,
+    `        <cMun>${cityCode}</cMun>`,
+    `        <xMun>${escapeXml(settings.cityName)}</xMun>`,
+    `        <UF>${escapeXml(state)}</UF>`,
+    zipCode ? `        <CEP>${zipCode}</CEP>` : '',
+    '        <cPais>1058</cPais>',
+    '        <xPais>BRASIL</xPais>',
+    '      </enderEmit>',
     `      <IE>${onlyDigits(settings.stateRegistration)}</IE>`,
-    `      <CRT>${settings.taxRegime === 'normal' ? '3' : '1'}</CRT>`,
+    `      <CRT>${escapeXml(crt)}</CRT>`,
     '    </emit>',
     itemXml,
     '    <total>',

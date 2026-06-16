@@ -6,7 +6,25 @@ import './FiscalSettings.css';
 
 type FiscalResponse = {
   settings: FiscalSettingsType;
-  readiness: { ready: boolean; missing: string[] };
+  readiness: FiscalReadiness;
+};
+
+type FiscalReadinessRequirement = {
+  key: string;
+  group: string;
+  label: string;
+  message: string;
+  status: 'ok' | 'missing';
+};
+
+type FiscalReadiness = {
+  ready: boolean;
+  canIssue?: boolean;
+  mode?: 'internal_control' | 'simulated' | 'sefaz_go';
+  summary?: string;
+  missing: string[];
+  warnings?: string[];
+  requirements?: FiscalReadinessRequirement[];
 };
 
 const emptySettings: FiscalSettingsType = {
@@ -21,7 +39,16 @@ const emptySettings: FiscalSettingsType = {
   stateRegistration: '',
   legalName: '',
   tradeName: '',
-  taxRegime: 'mei',
+  taxRegime: 'simples',
+  crt: '1',
+  streetName: '',
+  streetNumber: '',
+  district: '',
+  cityName: 'Goiania',
+  cityCode: '5208707',
+  state: 'GO',
+  zipCode: '',
+  complement: '',
   cscId: '',
   hasCsc: false,
   hasCertificatePassword: false,
@@ -80,6 +107,12 @@ const readFileAsBase64 = (file: File) => new Promise<string>((resolve, reject) =
 const formatCertificateDate = (value?: string | null) => (
   value ? new Date(value).toLocaleString('pt-BR') : 'Nao informado'
 );
+
+const defaultCrtForTaxRegime = (taxRegime: FiscalSettingsType['taxRegime']): FiscalSettingsType['crt'] => {
+  if (taxRegime === 'normal') return '3';
+  if (taxRegime === 'mei') return '4';
+  return '1';
+};
 
 export default function FiscalSettings() {
   const [form, setForm] = useState(emptySettings);
@@ -212,6 +245,10 @@ export default function FiscalSettings() {
     setForm(prev => ({ ...prev, [key]: value }));
   };
 
+  const updateTaxRegime = (taxRegime: FiscalSettingsType['taxRegime']) => {
+    setForm(prev => ({ ...prev, taxRegime, crt: defaultCrtForTaxRegime(taxRegime) }));
+  };
+
   const filteredDocuments = statusFilter === 'all'
     ? documents
     : documents.filter(doc => doc.status === statusFilter);
@@ -221,7 +258,13 @@ export default function FiscalSettings() {
     return acc;
   }, {});
 
-  const fiscalEnabled = Boolean(form.enabled);
+  const fiscalEnabled = readiness.mode
+    ? readiness.mode !== 'internal_control'
+    : Boolean(form.enabled);
+  const readinessGroups = (readiness.requirements || []).reduce<Record<string, FiscalReadinessRequirement[]>>((acc, item) => {
+    acc[item.group] = [...(acc[item.group] || []), item];
+    return acc;
+  }, {});
 
   return (
     <div className="page-container fiscal-page">
@@ -246,10 +289,38 @@ export default function FiscalSettings() {
               ? 'O sistema seguira funcionando apenas com estoque, vendas e comprovantes internos.'
               : readiness.ready
               ? 'Agora falta ligar o motor de XML assinado e autorizacao SEFAZ.'
-              : readiness.missing.join(', ') || 'Revise as configuracoes.'}
+              : readiness.summary || readiness.missing.join(', ') || 'Revise as configuracoes.'}
           </span>
         </div>
       </div>
+
+      {fiscalEnabled && (
+        <div className="fiscal-readiness-grid">
+          {Object.entries(readinessGroups).map(([group, items]) => {
+            const groupReady = items.every(item => item.status === 'ok');
+            return (
+              <div className={`fiscal-readiness-card ${groupReady ? 'ready' : 'pending'}`} key={group}>
+                <div className="fiscal-readiness-title">
+                  {groupReady ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                  <strong>{group}</strong>
+                </div>
+                {items.map(item => (
+                  <div className={`fiscal-readiness-item ${item.status}`} key={item.key}>
+                    <span>{item.label}</span>
+                    <small>{item.status === 'ok' ? 'OK' : item.message}</small>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {readiness.warnings?.map(warning => (
+            <div className="fiscal-readiness-warning" key={warning}>
+              <AlertTriangle size={16} />
+              <span>{warning}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="fiscal-empty">Carregando...</div>
@@ -283,10 +354,19 @@ export default function FiscalSettings() {
               </div>
               <div className="form-group">
                 <label>Regime tributario</label>
-                <select className="form-control" value={form.taxRegime} onChange={e => update('taxRegime', e.target.value as FiscalSettingsType['taxRegime'])}>
+                <select className="form-control" value={form.taxRegime} onChange={e => updateTaxRegime(e.target.value as FiscalSettingsType['taxRegime'])}>
                   <option value="mei">MEI</option>
                   <option value="simples">Simples Nacional</option>
                   <option value="normal">Regime normal</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>CRT</label>
+                <select className="form-control" value={form.crt} onChange={e => update('crt', e.target.value as FiscalSettingsType['crt'])}>
+                  <option value="1">1 - Simples Nacional</option>
+                  <option value="2">2 - Simples excesso sublimite</option>
+                  <option value="3">3 - Regime normal</option>
+                  <option value="4">4 - MEI</option>
                 </select>
               </div>
             </div>
@@ -314,6 +394,55 @@ export default function FiscalSettings() {
             <div className="form-group">
               <label>Nome fantasia</label>
               <input className="form-control" value={form.tradeName} onChange={e => update('tradeName', e.target.value)} />
+            </div>
+
+            <div className="fiscal-section-title">
+              <ShieldCheck size={18} />
+              <span>Endereco fiscal do emitente</span>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>Logradouro *</label>
+                <input className="form-control" value={form.streetName} onChange={e => update('streetName', e.target.value)} placeholder="Rua, avenida, rodovia..." />
+              </div>
+              <div className="form-group">
+                <label>Numero *</label>
+                <input className="form-control" value={form.streetNumber} onChange={e => update('streetNumber', e.target.value)} />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>Bairro *</label>
+                <input className="form-control" value={form.district} onChange={e => update('district', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Complemento</label>
+                <input className="form-control" value={form.complement} onChange={e => update('complement', e.target.value)} />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>Municipio *</label>
+                <input className="form-control" value={form.cityName} onChange={e => update('cityName', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Codigo IBGE *</label>
+                <input className="form-control" inputMode="numeric" value={form.cityCode} onChange={e => update('cityCode', e.target.value)} placeholder="Goiania: 5208707" />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>UF *</label>
+                <input className="form-control" maxLength={2} value={form.state} onChange={e => update('state', e.target.value.toUpperCase())} placeholder="GO" />
+              </div>
+              <div className="form-group">
+                <label>CEP *</label>
+                <input className="form-control" inputMode="numeric" value={form.zipCode} onChange={e => update('zipCode', e.target.value)} placeholder="00000000" />
+              </div>
             </div>
 
             <div className="form-row">
