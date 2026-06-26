@@ -71,7 +71,8 @@ Ele nao substitui a homologacao oficial. Serve para deixar o produto pronto ante
 - `fiscalProviders.js`: escolhe o provedor fiscal atual e contem o simulador.
 - `fiscalXmlBuilder.js`: monta a estrutura XML NFC-e base.
 - `fiscalXmlSigner.js`: assina o `infNFe` com certificado A1 em XMLDSig, usando `SignedInfo`, `DigestValue`, `SignatureValue` e `X509Certificate`.
-- Futuro `SefazGoProvider`: deve assinar XML, validar schema, enviar para webservice, consultar recibo/protocolo, tratar rejeicoes reais e gravar XML autorizado.
+- `fiscalXmlValidator.js`: valida tecnicamente o XML assinado, incluindo estrutura NFC-e, totais, chave de acesso, assinatura e validacao XSD opcional.
+- Futuro `SefazGoProvider`: deve enviar para webservice oficial, consultar recibo/protocolo, tratar rejeicoes reais e gravar XML autorizado.
 
 ## Assinatura XML
 
@@ -83,11 +84,26 @@ O sistema ja possui uma primeira assinatura XML em padrao XMLDSig para NFC-e:
 - inclui o certificado X.509 em `KeyInfo/X509Data`;
 - impede nova assinatura quando o XML ja possui `<Signature>`.
 
-No Windows, a assinatura usa PowerShell/.NET para acessar o PFX. No Linux/VPS, usa OpenSSL para extrair chave/certificado e `crypto` do Node para assinar. Essa etapa ainda nao substitui a validacao por schemas nem o envio oficial ao webservice da SEFAZ.
+No Windows, a assinatura usa PowerShell/.NET para acessar o PFX. No Linux/VPS, usa OpenSSL para extrair chave/certificado e `crypto` do Node para assinar. Essa etapa ainda nao substitui o envio oficial ao webservice da SEFAZ.
+
+## Validacao tecnica do XML
+
+O sistema possui validacao tecnica antes da autorizacao fiscal:
+
+- confere raiz `nfeProc` versao 4.00 e namespace oficial da NF-e;
+- confere NFC-e modelo 65, cUF de Goias, ambiente, forma de emissao e campos principais de `ide`;
+- valida emitente, endereco, CNPJ, IE, UF, municipio, CEP e CRT;
+- valida itens, NCM, CFOP, quantidade, preco unitario, total do item e grupos minimos de impostos;
+- confere totais da NFC-e e total pago;
+- valida a chave de acesso com 44 digitos e digito verificador;
+- valida a assinatura XMLDSig e o `DigestValue`;
+- permite validacao XSD oficial quando `NFCE_XSD_PATH` aponta para o schema baixado dos portais oficiais.
+
+Sem `NFCE_XSD_PATH`, a validacao estrutural propria continua ativa. Com `FISCAL_XSD_STRICT=true`, a ausencia do schema oficial passa a rejeitar tecnicamente o XML.
 
 ## Proximas etapas tecnicas
 
-1. Validar XML por schemas oficiais antes do envio.
+1. Baixar e versionar operacionalmente o pacote oficial de schemas no VPS.
 2. Mapear campos fiscais dos produtos: NCM, CFOP, CSOSN/CST, unidade, origem, aliquotas e beneficios fiscais quando aplicavel.
 3. Implementar webservices de autorizacao, consulta, cancelamento, inutilizacao e contingencia conforme ambiente GO.
 4. Gerar DANFE NFC-e e QR Code conforme manual nacional.

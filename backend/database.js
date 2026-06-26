@@ -188,6 +188,20 @@ const initDB = () => {
   `).run();
 
   db.prepare(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT,
+      actorUserId TEXT,
+      actorRole TEXT,
+      action TEXT NOT NULL,
+      entityType TEXT,
+      entityId TEXT,
+      metadata TEXT,
+      createdAt TEXT
+    )
+  `).run();
+
+  db.prepare(`
     CREATE TABLE IF NOT EXISTS fiscal_settings (
       establishmentId TEXT PRIMARY KEY,
       enabled INTEGER DEFAULT 0,
@@ -315,6 +329,8 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_payment_transactions_establishment ON payment_transactions(establishmentId, status, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_ai_reports_establishment ON ai_reports(establishmentId, periodType, periodStart)',
     'CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(establishmentId, audience, readAt, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logs_establishment ON audit_logs(establishmentId, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_fiscal_documents_sale ON fiscal_documents(establishmentId, saleId, status)',
   ];
   for (const sql of indexes) {

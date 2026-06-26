@@ -62,6 +62,50 @@ export interface Establishment {
   userCount?: number;
   salesCount?: number;
   revenueMonth?: number;
+  planDefinition?: PlanDefinition;
+  usage?: TenantUsage;
+  createdAt: string;
+}
+
+export interface PlanLimits {
+  maxUsers: number | null;
+  maxOperators: number | null;
+  maxProducts: number | null;
+  maxPaymentAccounts: number | null;
+}
+
+export interface PlanDefinition {
+  key: Establishment['plan'];
+  label: string;
+  description: string;
+  limits: PlanLimits;
+  features: {
+    fiscal: boolean;
+    aiReports: boolean;
+    mercadoPagoPix: boolean;
+    mercadoPagoPoint: boolean;
+  };
+}
+
+export interface TenantUsage {
+  users: number;
+  operators: number;
+  products: number;
+  paymentAccounts: number;
+}
+
+export interface AuditLog {
+  id: string;
+  establishmentId?: string | null;
+  establishmentName?: string | null;
+  actorUserId?: string | null;
+  actorName?: string | null;
+  actorUsername?: string | null;
+  actorRole?: string | null;
+  action: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 

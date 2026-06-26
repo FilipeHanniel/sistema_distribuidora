@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 16/06/2026
+Atualizado em: 26/06/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -47,21 +47,22 @@ Objetivo: preparar o caminho profissional para emissao fiscal real.
 - Remover dependencia de caminho manual do certificado. Concluido em 14/06/2026.
 - Validar cadastro fiscal do estabelecimento. Concluido em 16/06/2026.
 - Avancar assinatura XML em padrao real. Concluido em 16/06/2026 com XMLDSig inicial.
+- Validar tecnicamente XML fiscal antes da autorizacao. Concluido em 26/06/2026 com validacao estrutural e suporte a XSD oficial.
 - Preparar `SefazGoProvider` para homologacao real quando houver CNPJ/IE/certificado.
 
 ## Fase 4 - Produto SaaS e multiempresa
 
-Status: base criada
+Status: em implementacao
 
 Objetivo: transformar o sistema em plataforma comercial para multiplos estabelecimentos.
 
 - Refinar onboarding do SuperAdmin.
-- Criar planos e limites por plano.
-- Implementar bloqueio por inadimplencia.
+- Criar planos e limites por plano. Concluido em 26/06/2026 com catalogo inicial basic/premium/enterprise.
+- Implementar bloqueio por inadimplencia. Parcial em 26/06/2026: assinatura suspensa bloqueia operacao; atraso segue como periodo de tolerancia.
 - Melhorar dashboard do SuperAdmin com metricas de plataforma.
 - Criar configuracoes por estabelecimento.
 - Revisar isolamento de dados por tenant.
-- Criar trilha de auditoria para acoes sensiveis.
+- Criar trilha de auditoria para acoes sensiveis. Iniciado em 26/06/2026 com registros administrativos, produtos, contas de recebimento e vendas.
 
 ## Fase 5 - Operacao do estabelecimento
 
@@ -118,12 +119,13 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 ## Proximo passo recomendado
 
-Avancar a Fase 3 - Fiscal NFC-e, mantendo a Fase 2 apenas com pendencias externas/controladas:
+Avancar a Fase 4 - Produto SaaS e multiempresa, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Validar XML por schemas oficiais antes de qualquer tentativa real com Sefaz.
-2. Criar testes automatizados de venda duplicada, falha fiscal e certificado invalido.
-3. Preparar `SefazGoProvider` para homologacao real quando houver CNPJ/IE/certificado de empresa.
-4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-5. Retomar webhook Mercado Pago apenas com uma cobranca real controlada.
+1. Testar limites de plano no VPS com basic/premium/enterprise.
+2. Criar tela de configuracoes por estabelecimento para dados comerciais e preferencias do sistema.
+3. Revisar isolamento de dados por tenant com testes automatizados.
+4. Criar fluxo de cobranca da plataforma com vencimento, tolerancia e suspensao automatica.
+5. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
+6. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

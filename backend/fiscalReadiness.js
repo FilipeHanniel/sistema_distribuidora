@@ -188,7 +188,7 @@ const getFiscalReadiness = (settings = {}) => {
     warnings.push('MEI normalmente deve usar CRT 4. Confirme com a contabilidade antes de emitir.');
   }
   if (mode === 'sefaz_go') {
-    warnings.push('SEFAZ GO real ainda depende de assinatura XML, schemas e webservices de homologacao.');
+    warnings.push('SEFAZ GO real ainda depende de credenciamento, schemas oficiais configurados e webservices de homologacao.');
   }
 
   return {

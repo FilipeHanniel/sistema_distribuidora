@@ -55,6 +55,14 @@ loadEnvFile(path.join(__dirname, '.env'));
 
 const db = require('./database');
 const { addOneMonth } = require('./database');
+const {
+  checkPlanLimit,
+  getPlanCatalogList,
+  getPlanDefinition,
+  getSubscriptionAccess,
+  normalizePlan,
+  normalizeSubscriptionStatus,
+} = require('./saasPolicy');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -215,12 +223,106 @@ const getTenantId = (req) => {
 
 const ensureEstablishmentExists = (establishmentId) => {
   if (!establishmentId) return null;
-  return db.prepare('SELECT id, name FROM establishments WHERE id = ?').get(establishmentId);
+  return db.prepare('SELECT * FROM establishments WHERE id = ?').get(establishmentId);
 };
 
 const canAccessTenantRecord = (req, table, id) => {
-  if (req.user.role === 'superadmin') return db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(id);
-  return db.prepare(`SELECT id FROM ${table} WHERE id = ? AND establishmentId = ?`).get(id, req.user.establishmentId);
+  if (req.user.role === 'superadmin') return db.prepare(`SELECT id, establishmentId FROM ${table} WHERE id = ?`).get(id);
+  return db.prepare(`SELECT id, establishmentId FROM ${table} WHERE id = ? AND establishmentId = ?`).get(id, req.user.establishmentId);
+};
+
+const getTenantUsage = (establishmentId) => ({
+  users: db.prepare("SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role != 'superadmin' AND isDeleted = 0")
+    .get(establishmentId).c,
+  operators: db.prepare("SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'operador' AND isDeleted = 0")
+    .get(establishmentId).c,
+  products: db.prepare('SELECT COUNT(*) as c FROM products WHERE establishmentId = ?')
+    .get(establishmentId).c,
+  paymentAccounts: db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ? AND active = 1')
+    .get(establishmentId).c,
+});
+
+const buildTenantStatus = (establishmentId) => {
+  const establishment = ensureEstablishmentExists(establishmentId);
+  if (!establishment) return null;
+  const plan = getPlanDefinition(establishment.plan);
+  const subscription = getSubscriptionAccess(establishment.subscriptionStatus);
+  return {
+    establishment: {
+      id: establishment.id,
+      name: establishment.name,
+      plan: plan.key,
+      subscriptionStatus: normalizeSubscriptionStatus(establishment.subscriptionStatus),
+      subscriptionDueDate: establishment.subscriptionDueDate,
+    },
+    plan,
+    usage: getTenantUsage(establishmentId),
+    subscription,
+  };
+};
+
+const requireOperationalSubscription = (req, res, next) => {
+  if (req.user.role === 'superadmin') return next();
+  const tenantStatus = buildTenantStatus(req.user.establishmentId);
+  if (!tenantStatus) return res.status(403).json({ error: 'Estabelecimento nao encontrado.' });
+  if (!tenantStatus.subscription.canOperate) {
+    return res.status(402).json({
+      error: tenantStatus.subscription.message,
+      code: 'subscription_suspended',
+      subscriptionStatus: tenantStatus.establishment.subscriptionStatus,
+    });
+  }
+  return next();
+};
+
+const enforcePlanLimit = (establishmentId, resource, currentCount, increment = 1) => {
+  const establishment = ensureEstablishmentExists(establishmentId);
+  if (!establishment) {
+    const err = new Error('Estabelecimento obrigatorio ou invalido.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const check = checkPlanLimit(establishment.plan, resource, currentCount, increment);
+  if (!check.allowed) {
+    const err = new Error(`Limite do plano ${getPlanDefinition(establishment.plan).label} atingido.`);
+    err.statusCode = 403;
+    err.planLimit = {
+      plan: normalizePlan(establishment.plan),
+      resource,
+      limit: check.limit,
+      currentCount: check.currentCount,
+      nextCount: check.nextCount,
+    };
+    throw err;
+  }
+  return check;
+};
+
+const sendPlanLimitError = (res, err) => res.status(err.statusCode || 403).json({
+  error: err.message,
+  code: 'plan_limit_reached',
+  planLimit: err.planLimit,
+});
+
+const logAudit = ({ req, establishmentId, action, entityType, entityId, metadata = {} }) => {
+  try {
+    db.prepare(`
+      INSERT INTO audit_logs (id, establishmentId, actorUserId, actorRole, action, entityType, entityId, metadata, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      uuidv4(),
+      establishmentId || null,
+      req.user?.id || null,
+      req.user?.role || null,
+      action,
+      entityType || null,
+      entityId || null,
+      JSON.stringify(metadata),
+      new Date().toISOString()
+    );
+  } catch (err) {
+    console.error('[Audit Log Error]', err.message);
+  }
 };
 
 const credentialKey = crypto.createHash('sha256').update(JWT_SECRET).digest();
@@ -869,6 +971,24 @@ const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, 
     }
   });
   insertSale();
+  try {
+    db.prepare(`
+      INSERT INTO audit_logs (id, establishmentId, actorUserId, actorRole, action, entityType, entityId, metadata, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      uuidv4(),
+      estId,
+      userId,
+      null,
+      'sale.created',
+      'sale',
+      saleId,
+      JSON.stringify({ paymentMethod, totalAmount, itemCount: items.length }),
+      now
+    );
+  } catch (err) {
+    console.error('[Audit Log Error]', err.message);
+  }
   let fiscalDocument = null;
   const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
   if (settings?.enabled && settings?.autoIssueOnPayment) {
@@ -1188,20 +1308,42 @@ app.get('/api/users', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.post('/api/register', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/tenant/status', authenticateToken, isTenantUser, (req, res) => {
+  try {
+    const tenantStatus = buildTenantStatus(req.user.establishmentId);
+    if (!tenantStatus) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+    res.json(tenantStatus);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { username, password, name, role } = req.body;
   if (!username || !password || !name) return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
 
   if (req.user.role === 'gestor') {
-    const count = db.prepare(
-      "SELECT COUNT(*) as c FROM users WHERE establishmentId = ? AND role = 'operador' AND isDeleted = 0"
-    ).get(req.user.establishmentId);
-    if (count.c >= 5) return res.status(400).json({ error: 'Limite de 5 funcionários atingido.' });
+    try {
+      const usage = getTenantUsage(req.user.establishmentId);
+      enforcePlanLimit(req.user.establishmentId, 'maxUsers', usage.users);
+      enforcePlanLimit(req.user.establishmentId, 'maxOperators', usage.operators);
+    } catch (err) {
+      if (err.planLimit) return sendPlanLimitError(res, err);
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
 
     const id = uuidv4();
     try {
       db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, ?)`)
         .run(id, username, bcrypt.hashSync(password, 10), name, req.user.establishmentId, new Date().toISOString());
+      logAudit({
+        req,
+        establishmentId: req.user.establishmentId,
+        action: 'user.created',
+        entityType: 'user',
+        entityId: id,
+        metadata: { role: 'operador', username },
+      });
       return res.status(201).json({ message: 'Funcionário criado com sucesso!' });
     } catch (err) {
       return res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
@@ -1211,6 +1353,30 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, (req, res) => {
   const id = uuidv4();
   const assignedRole = role || 'operador';
   const estId = req.body.establishmentId || null;
+  const targetEstablishment = estId ? ensureEstablishmentExists(estId) : null;
+  if (targetEstablishment) {
+    const currentUsage = getTenantUsage(estId);
+    const checks = [
+      ['maxUsers', currentUsage.users],
+      ...(assignedRole === 'operador' ? [['maxOperators', currentUsage.operators]] : []),
+    ];
+    for (const [resource, currentCount] of checks) {
+      const limitCheck = checkPlanLimit(targetEstablishment.plan, resource, currentCount);
+      if (!limitCheck.allowed) {
+        return res.status(403).json({
+          error: `Limite do plano ${getPlanDefinition(targetEstablishment.plan).label} atingido.`,
+          code: 'plan_limit_reached',
+          planLimit: {
+            plan: normalizePlan(targetEstablishment.plan),
+            resource,
+            limit: limitCheck.limit,
+            currentCount: limitCheck.currentCount,
+            nextCount: limitCheck.nextCount,
+          },
+        });
+      }
+    }
+  }
   if (assignedRole === 'superadmin') {
     return res.status(400).json({ error: 'Super Admin não pode ser criado por esta rota.' });
   }
@@ -1220,13 +1386,21 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, (req, res) => {
   try {
     db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)`)
       .run(id, username, bcrypt.hashSync(password, 10), name, assignedRole, estId, new Date().toISOString());
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'user.created',
+      entityType: 'user',
+      entityId: id,
+      metadata: { role: assignedRole, username },
+    });
     res.status(201).json({ message: 'Usuário criado com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
   }
 });
 
-app.put('/api/users/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { name, role, password, username } = req.body;
   try {
@@ -1257,7 +1431,7 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, (req, res) => {
+app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { active } = req.body;
   try {
@@ -1270,13 +1444,20 @@ app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, (req, res
       if (!u) return res.status(403).json({ error: 'Sem permissão.' });
     }
     db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+    logAudit({
+      req,
+      establishmentId: target.establishmentId,
+      action: active ? 'user.activated' : 'user.deactivated',
+      entityType: 'user',
+      entityId: id,
+    });
     res.json({ message: `Usuário ${active ? 'ativado' : 'desativado'}!` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, (req, res) => {
+app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   try {
     const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
@@ -1288,6 +1469,13 @@ app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, (req, res
       if (!u) return res.status(403).json({ error: 'Sem permissão para excluir este usuário.' });
     }
     db.prepare('UPDATE users SET isDeleted = 1 WHERE id = ?').run(id);
+    logAudit({
+      req,
+      establishmentId: target.establishmentId,
+      action: 'user.deleted',
+      entityType: 'user',
+      entityId: id,
+    });
     res.json({ message: 'Usuário excluído com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1322,7 +1510,7 @@ app.get('/api/products', authenticateToken, (req, res) => {
   }
 });
 
-app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
+app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { barcode, name, costPrice, sellPrice, stock, category, ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate } = req.body;
   if (!name || costPrice == null || sellPrice == null) {
     return res.status(400).json({ error: 'Nome, preço de custo e preço de venda são obrigatórios.' });
@@ -1334,6 +1522,22 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
     return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
   }
   try {
+    const usage = getTenantUsage(estId);
+    const establishment = ensureEstablishmentExists(estId);
+    const limitCheck = checkPlanLimit(establishment.plan, 'maxProducts', usage.products);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        error: `Limite do plano ${getPlanDefinition(establishment.plan).label} atingido.`,
+        code: 'plan_limit_reached',
+        planLimit: {
+          plan: normalizePlan(establishment.plan),
+          resource: 'maxProducts',
+          limit: limitCheck.limit,
+          currentCount: limitCheck.currentCount,
+          nextCount: limitCheck.nextCount,
+        },
+      });
+    }
     db.prepare(`
       INSERT INTO products (
         id, barcode, name, costPrice, sellPrice, stock, category,
@@ -1345,13 +1549,21 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, (req, res) => {
       ncm || null, cfop || null, csosn || null, cst || null, fiscalUnit || 'UN', origin || '0', Number(taxRate || 0),
       estId, now, now
     );
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'product.created',
+      entityType: 'product',
+      entityId: id,
+      metadata: { name },
+    });
     res.status(201).json({ id, message: 'Produto inserido com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const now = new Date().toISOString();
@@ -1373,18 +1585,41 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
     sql += `updatedAt = ? WHERE id = ?`;
     params.push(now, id);
     db.prepare(sql).run(...params);
+    logAudit({
+      req,
+      establishmentId: target.establishmentId,
+      action: 'user.updated',
+      entityType: 'user',
+      entityId: id,
+      metadata: { username, role: req.user.role === 'superadmin' && role ? role : target.role },
+    });
+    logAudit({
+      req,
+      establishmentId: product.establishmentId,
+      action: 'product.updated',
+      entityType: 'product',
+      entityId: id,
+      metadata: { fields: Object.keys(updates).filter(key => allowedProductFields.includes(key)) },
+    });
     res.json({ message: 'Produto atualizado com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   try {
     const product = canAccessTenantRecord(req, 'products', id);
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
     db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    logAudit({
+      req,
+      establishmentId: product.establishmentId,
+      action: 'product.deleted',
+      entityType: 'product',
+      entityId: id,
+    });
     res.json({ message: 'Produto excluido!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1392,7 +1627,7 @@ app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, (req, res) =
 });
 
 // SEGURANÇA: verificar que o produto pertence ao estabelecimento antes de atualizar estoque
-app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, (req, res) => {
+app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { quantityStep } = req.body;
   const now = new Date().toISOString();
@@ -1765,7 +2000,7 @@ app.get('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
+app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   try {
     const estId = getTenantId(req);
     if (!estId || !ensureEstablishmentExists(estId)) {
@@ -1778,8 +2013,23 @@ app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => 
     if (provider === 'mercado_pago' && !String(credentials?.accessToken || '').trim()) {
       return res.status(400).json({ error: 'Access Token do Mercado Pago e obrigatorio.' });
     }
-    const existingCount = db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ?').get(estId).c;
-    if (existingCount >= 3) return res.status(400).json({ error: 'Limite inicial de 3 contas Pix atingido.' });
+    const existingCountRaw = db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ? AND active = 1').get(estId).c;
+    const establishment = ensureEstablishmentExists(estId);
+    const accountLimitCheck = checkPlanLimit(establishment.plan, 'maxPaymentAccounts', existingCountRaw);
+    if (!accountLimitCheck.allowed) {
+      return res.status(403).json({
+        error: `Limite do plano ${getPlanDefinition(establishment.plan).label} atingido.`,
+        code: 'plan_limit_reached',
+        planLimit: {
+          plan: normalizePlan(establishment.plan),
+          resource: 'maxPaymentAccounts',
+          limit: accountLimitCheck.limit,
+          currentCount: accountLimitCheck.currentCount,
+          nextCount: accountLimitCheck.nextCount,
+        },
+      });
+    }
+    const existingCount = existingCountRaw;
 
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -1794,13 +2044,21 @@ app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => 
     });
     createAccount();
 
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_account.created',
+      entityType: 'pix_account',
+      entityId: id,
+      metadata: { provider, name, isDefault: Boolean(shouldDefault) },
+    });
     res.status(201).json(sanitizePixAccount(db.prepare('SELECT * FROM pix_accounts WHERE id = ?').get(id)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   try {
     const estId = req.user.role === 'superadmin' ? req.body.establishmentId : req.user.establishmentId;
     const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
@@ -1828,6 +2086,14 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) 
     });
     updateAccount();
 
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_account.updated',
+      entityType: 'pix_account',
+      entityId: req.params.id,
+      metadata: { provider, name, active: active ? 1 : 0, isDefault: isDefault ? 1 : 0 },
+    });
     res.json(sanitizePixAccount(db.prepare('SELECT * FROM pix_accounts WHERE id = ?').get(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1854,7 +2120,7 @@ app.get('/api/pix/accounts/:id/point/setup', authenticateToken, isGestor, async 
   }
 });
 
-app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, async (req, res) => {
+app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
   try {
     let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     const accountSuffix = account.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20).toUpperCase();
@@ -1933,7 +2199,7 @@ app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, isGestor, as
   }
 });
 
-app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authenticateToken, isGestor, async (req, res) => {
+app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
   try {
     let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     if (!credentials.storeId || !credentials.posId) {
@@ -1975,7 +2241,7 @@ app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authentic
   }
 });
 
-app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   try {
     const estId = req.user.role === 'superadmin' ? req.query.establishmentId : req.user.establishmentId;
     const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
@@ -1986,16 +2252,31 @@ app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, (req, re
       const now = new Date().toISOString();
       db.prepare('UPDATE pix_accounts SET active = 0, isDefault = 0, updatedAt = ? WHERE id = ? AND establishmentId = ?')
         .run(now, req.params.id, estId);
+      logAudit({
+        req,
+        establishmentId: estId,
+        action: 'payment_account.deactivated',
+        entityType: 'pix_account',
+        entityId: req.params.id,
+        metadata: { reason: 'linked_transactions' },
+      });
       return res.json({ message: 'Conta possui historico de transacoes e foi desativada.' });
     }
     db.prepare('DELETE FROM pix_accounts WHERE id = ? AND establishmentId = ?').run(req.params.id, estId);
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_account.deleted',
+      entityType: 'pix_account',
+      entityId: req.params.id,
+    });
     res.json({ message: 'Conta Pix removida.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/sales', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   const { items, totalAmount, paymentMethod } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Itens da venda são obrigatórios.' });
@@ -2021,7 +2302,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, async (req, res) => {
   }
 });
 
-app.post('/api/payments/pix', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/payments/pix', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   let transactionId = null;
   try {
     const { items, totalAmount, pixAccountId, deviceId } = req.body;
@@ -2230,7 +2511,7 @@ app.get('/api/payments/transactions', authenticateToken, isGestor, (req, res) =>
   }
 });
 
-app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor, async (req, res) => {
+app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
   const estId = req.user.establishmentId;
   try {
     let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?')
@@ -2268,7 +2549,7 @@ app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor
   }
 });
 
-app.post('/api/payments/card', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/payments/card', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   let transactionId = null;
   try {
     const { items, totalAmount, accountId, paymentType, installments } = req.body;
@@ -2436,7 +2717,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
 // SUPER ADMIN — ESTABELECIMENTOS
 // ==============================
 // PAGAMENTOS PIX
-app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -2512,7 +2793,7 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, async 
   }
 });
 
-app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -2561,7 +2842,7 @@ app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, async
   }
 });
 
-app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, async (req, res) => {
+app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -2606,6 +2887,10 @@ app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, asy
 });
 
 // SUPER ADMIN - ESTABELECIMENTOS
+app.get('/api/admin/plans', authenticateToken, isSuperAdmin, (req, res) => {
+  res.json(getPlanCatalogList());
+});
+
 app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
   try {
     const requestedPeriod = Number(req.query.periodDays || req.query.period || 30);
@@ -2842,6 +3127,35 @@ app.get('/api/admin/business-insights', authenticateToken, isSuperAdmin, (req, r
   }
 });
 
+app.get('/api/admin/audit-logs', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 80), 1), 250);
+    const establishmentId = String(req.query.establishmentId || '').trim();
+    const params = [];
+    let where = '';
+    if (establishmentId) {
+      where = 'WHERE al.establishmentId = ?';
+      params.push(establishmentId);
+    }
+    const rows = db.prepare(`
+      SELECT al.*, e.name as establishmentName, u.name as actorName, u.username as actorUsername
+      FROM audit_logs al
+      LEFT JOIN establishments e ON e.id = al.establishmentId
+      LEFT JOIN users u ON u.id = al.actorUserId
+      ${where}
+      ORDER BY al.createdAt DESC
+      LIMIT ?
+    `).all(...params, limit);
+    res.json(rows.map(row => {
+      let metadata = {};
+      try { metadata = JSON.parse(row.metadata || '{}'); } catch {}
+      return { ...row, metadata };
+    }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res) => {
   try {
     const ests = db.prepare('SELECT * FROM establishments ORDER BY createdAt DESC').all();
@@ -2856,7 +3170,16 @@ app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res)
       const lastPayment = db.prepare(
         "SELECT paidAt, amount FROM payments WHERE establishmentId = ? AND paidAt IS NOT NULL ORDER BY paidAt DESC LIMIT 1"
       ).get(est.id);
-      return { ...est, userCount, salesCount, revenueMonth, lastPayment };
+      return {
+        ...est,
+        plan: normalizePlan(est.plan),
+        planDefinition: getPlanDefinition(est.plan),
+        usage: getTenantUsage(est.id),
+        userCount,
+        salesCount,
+        revenueMonth,
+        lastPayment,
+      };
     });
     res.json(result);
   } catch (err) {
@@ -2873,6 +3196,7 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
   const estId = uuidv4();
   const gestorId = uuidv4();
   const now = new Date().toISOString();
+  const normalizedPlan = normalizePlan(plan || 'basic');
   // Assinatura mensal: vence no mesmo dia do mês seguinte
   const dueDate = subscriptionDueDate || addOneMonth(now);
 
@@ -2880,13 +3204,21 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
     const createEstAndGestor = db.transaction(() => {
       db.prepare(`INSERT INTO establishments (id, name, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, createdAt)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
-        .run(estId, name, ownerName || gestorName, email || null, phone || null, plan || 'basic',
+        .run(estId, name, ownerName || gestorName, email || null, phone || null, normalizedPlan,
           parseFloat(monthlyAmount) || 0, dueDate, now);
       db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
         VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, ?)`)
         .run(gestorId, gestorUsername, bcrypt.hashSync(gestorPassword, 10), gestorName, estId, now);
     });
     createEstAndGestor();
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'establishment.created',
+      entityType: 'establishment',
+      entityId: estId,
+      metadata: { name, plan: normalizedPlan, gestorUsername },
+    });
     res.status(201).json({ id: estId, message: 'Estabelecimento criado com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao criar. Login do gestor pode já estar em uso.' });
@@ -2897,8 +3229,18 @@ app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, 
   const { id } = req.params;
   const { name, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, notes } = req.body;
   try {
+    const normalizedPlan = normalizePlan(plan || 'basic');
+    const normalizedStatus = normalizeSubscriptionStatus(subscriptionStatus || 'active');
     db.prepare(`UPDATE establishments SET name=?, ownerName=?, email=?, phone=?, plan=?, monthlyAmount=?, subscriptionStatus=?, subscriptionDueDate=?, notes=? WHERE id=?`)
-      .run(name, ownerName, email, phone, plan, parseFloat(monthlyAmount) || 0, subscriptionStatus, subscriptionDueDate, notes || null, id);
+      .run(name, ownerName, email, phone, normalizedPlan, parseFloat(monthlyAmount) || 0, normalizedStatus, subscriptionDueDate, notes || null, id);
+    logAudit({
+      req,
+      establishmentId: id,
+      action: 'establishment.updated',
+      entityType: 'establishment',
+      entityId: id,
+      metadata: { plan: normalizedPlan, subscriptionStatus: normalizedStatus, monthlyAmount: parseFloat(monthlyAmount) || 0 },
+    });
     res.json({ message: 'Estabelecimento atualizado!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2909,8 +3251,17 @@ app.patch('/api/admin/establishments/:id/subscription', authenticateToken, isSup
   const { id } = req.params;
   const { subscriptionStatus, subscriptionDueDate } = req.body;
   try {
+    const normalizedStatus = normalizeSubscriptionStatus(subscriptionStatus || 'active');
     db.prepare('UPDATE establishments SET subscriptionStatus=?, subscriptionDueDate=? WHERE id=?')
-      .run(subscriptionStatus, subscriptionDueDate, id);
+      .run(normalizedStatus, subscriptionDueDate, id);
+    logAudit({
+      req,
+      establishmentId: id,
+      action: 'subscription.updated',
+      entityType: 'establishment',
+      entityId: id,
+      metadata: { subscriptionStatus: normalizedStatus, subscriptionDueDate },
+    });
     res.json({ message: 'Assinatura atualizada!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2920,8 +3271,17 @@ app.patch('/api/admin/establishments/:id/subscription', authenticateToken, isSup
 app.delete('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
   try {
+    const est = db.prepare('SELECT name FROM establishments WHERE id = ?').get(id);
     db.prepare('UPDATE users SET isDeleted = 1 WHERE establishmentId = ?').run(id);
     db.prepare('DELETE FROM establishments WHERE id = ?').run(id);
+    logAudit({
+      req,
+      establishmentId: id,
+      action: 'establishment.deleted',
+      entityType: 'establishment',
+      entityId: id,
+      metadata: { name: est?.name || null },
+    });
     res.json({ message: 'Estabelecimento removido!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2978,6 +3338,14 @@ app.post('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdm
         .run(newDueDate, 'active', id);
     });
     registerPayment();
+    logAudit({
+      req,
+      establishmentId: id,
+      action: 'platform_payment.registered',
+      entityType: 'payment',
+      entityId: paymentId,
+      metadata: { amount: parseFloat(amount), previousDueDate: currentDueDate, newDueDate, notes: notes || null },
+    });
 
     res.status(201).json({
       message: 'Pagamento registrado! Próximo vencimento: ' + new Date(newDueDate).toLocaleDateString('pt-BR'),
@@ -2992,7 +3360,18 @@ app.post('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdm
 
 app.delete('/api/admin/payments/:id', authenticateToken, isSuperAdmin, (req, res) => {
   try {
+    const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
     db.prepare('DELETE FROM payments WHERE id = ?').run(req.params.id);
+    if (payment) {
+      logAudit({
+        req,
+        establishmentId: payment.establishmentId,
+        action: 'platform_payment.deleted',
+        entityType: 'payment',
+        entityId: req.params.id,
+        metadata: { amount: payment.amount, paidAt: payment.paidAt },
+      });
+    }
     res.json({ message: 'Pagamento removido!' });
   } catch (err) {
     res.status(500).json({ error: err.message });

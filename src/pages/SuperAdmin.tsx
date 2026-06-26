@@ -5,10 +5,10 @@ import {
   Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
   CreditCard, Receipt, Banknote, X, Users, UserPlus,
   BarChart3, ArrowUpRight, ArrowDownRight, Store, Activity,
-  Target, PackageSearch
+  Target, PackageSearch, ClipboardList
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
-import type { Establishment } from '../types';
+import type { AuditLog, Establishment, PlanDefinition } from '../types';
 import Modal from '../components/Modal';
 import './SuperAdmin.css';
 
@@ -109,7 +109,7 @@ interface ManagedEstablishment extends Establishment {
   lastPayment?: Pick<Payment, 'paidAt' | 'amount'>;
 }
 
-type Tab = 'platform' | 'businesses' | 'establishments' | 'billing';
+type Tab = 'platform' | 'businesses' | 'establishments' | 'billing' | 'audit';
 type PeriodDays = 30 | 90 | 365;
 type Plan = Establishment['plan'];
 type SubscriptionStatus = Establishment['subscriptionStatus'];
@@ -141,6 +141,8 @@ export default function SuperAdmin() {
   const [establishments, setEstablishments] = useState<ManagedEstablishment[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [businessInsights, setBusinessInsights] = useState<BusinessInsights | null>(null);
+  const [plans, setPlans] = useState<PlanDefinition[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
@@ -168,13 +170,17 @@ export default function SuperAdmin() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [estRes, statsRes, insightsRes] = await Promise.all([
+      const [estRes, statsRes, insightsRes, plansRes, auditRes] = await Promise.all([
         fetch(`${API}/admin/establishments`, { headers: getHeaders() }),
         fetch(`${API}/admin/stats?periodDays=${periodDays}`, { headers: getHeaders() }),
         fetch(`${API}/admin/business-insights?periodDays=${periodDays}`, { headers: getHeaders() }),
+        fetch(`${API}/admin/plans`, { headers: getHeaders() }),
+        fetch(`${API}/admin/audit-logs?limit=80`, { headers: getHeaders() }),
       ]);
       if (estRes.ok) setEstablishments(await estRes.json());
       if (statsRes.ok) setStats(await statsRes.json());
+      if (plansRes.ok) setPlans(await plansRes.json());
+      if (auditRes.ok) setAuditLogs(await auditRes.json());
       if (insightsRes.ok) {
         const data: BusinessInsights = await insightsRes.json();
         setBusinessInsights(data);
@@ -380,6 +386,45 @@ export default function SuperAdmin() {
     { label: 'Estoque em atencao', value: businessInsights.summary.lowStockBusinesses, note: 'Negocios com alerta de estoque', icon: <PackageSearch size={18} /> },
   ] : [];
 
+  const planOptions = plans.length > 0 ? plans : [
+    { key: 'basic', label: 'Basico', description: '', limits: { maxUsers: 6, maxOperators: 5, maxProducts: 500, maxPaymentAccounts: 3 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: false } },
+    { key: 'premium', label: 'Premium', description: '', limits: { maxUsers: 16, maxOperators: 15, maxProducts: 3000, maxPaymentAccounts: 6 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: true } },
+    { key: 'enterprise', label: 'Enterprise', description: '', limits: { maxUsers: null, maxOperators: null, maxProducts: null, maxPaymentAccounts: null }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: true } },
+  ] as PlanDefinition[];
+
+  const selectedPlan = planOptions.find(p => p.key === formData.plan);
+  const formatLimit = (value: number | null | undefined) => value == null ? 'Ilimitado' : value.toLocaleString('pt-BR');
+  const actionLabels: Record<string, string> = {
+    'establishment.created': 'Estabelecimento criado',
+    'establishment.updated': 'Estabelecimento atualizado',
+    'establishment.deleted': 'Estabelecimento removido',
+    'subscription.updated': 'Assinatura atualizada',
+    'platform_payment.registered': 'Pagamento registrado',
+    'platform_payment.deleted': 'Pagamento removido',
+    'payment_account.created': 'Conta criada',
+    'payment_account.updated': 'Conta atualizada',
+    'payment_account.deactivated': 'Conta desativada',
+    'payment_account.deleted': 'Conta removida',
+    'product.created': 'Produto criado',
+    'product.updated': 'Produto atualizado',
+    'product.deleted': 'Produto removido',
+    'sale.created': 'Venda registrada',
+    'user.created': 'Usuario criado',
+    'user.updated': 'Usuario atualizado',
+    'user.activated': 'Usuario ativado',
+    'user.deactivated': 'Usuario desativado',
+    'user.deleted': 'Usuario removido',
+  };
+
+  const summarizeAuditMetadata = (metadata?: Record<string, unknown>) => {
+    if (!metadata || Object.keys(metadata).length === 0) return 'Sem detalhes adicionais';
+    return Object.entries(metadata)
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .slice(0, 4)
+      .map(([key, value]) => `${key}: ${String(value)}`)
+      .join(' | ') || 'Sem detalhes adicionais';
+  };
+
   const getScoreClass = (score: number) => {
     if (score >= 70) return 'strong';
     if (score >= 40) return 'medium';
@@ -427,6 +472,9 @@ export default function SuperAdmin() {
         </button>
         <button className={`sa-tab ${tab === 'billing' ? 'active' : ''}`} onClick={() => setTab('billing')}>
           <CreditCard size={16} /> Cobranças
+        </button>
+        <button className={`sa-tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>
+          <ClipboardList size={16} /> Auditoria
         </button>
       </div>
 
@@ -776,6 +824,13 @@ export default function SuperAdmin() {
                     </div>
                   </div>
 
+                  {est.usage && est.planDefinition && (
+                    <div className="est-plan-usage">
+                      <span>Produtos {est.usage.products}/{formatLimit(est.planDefinition.limits.maxProducts)}</span>
+                      <span>Contas {est.usage.paymentAccounts}/{formatLimit(est.planDefinition.limits.maxPaymentAccounts)}</span>
+                    </div>
+                  )}
+
                   <div className="est-due-row">
                     {renderDueBadge(est)}
                     {lastPay && (
@@ -862,6 +917,57 @@ export default function SuperAdmin() {
         </div>
       )}
 
+      {/* ===== TAB: AUDITORIA ===== */}
+      {tab === 'audit' && (
+        <div className="audit-dashboard">
+          <div className="platform-toolbar">
+            <div>
+              <h2>Auditoria da plataforma</h2>
+              <p>Registro de acoes sensiveis feitas por gestores e pelo SuperAdmin.</p>
+            </div>
+            <button className="btn btn-secondary" onClick={loadData}>
+              <RefreshCw size={15} /> Atualizar
+            </button>
+          </div>
+          <div className="audit-table-wrap">
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Acao</th>
+                  <th>Estabelecimento</th>
+                  <th>Ator</th>
+                  <th>Entidade</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="audit-empty">Nenhum evento registrado ainda.</td>
+                  </tr>
+                ) : auditLogs.map(log => (
+                  <tr key={log.id}>
+                    <td>{formatDateTime(log.createdAt)}</td>
+                    <td><strong>{actionLabels[log.action] || log.action}</strong></td>
+                    <td>{log.establishmentName || log.establishmentId || 'Plataforma'}</td>
+                    <td>
+                      <span>{log.actorName || log.actorUsername || log.actorRole || 'Sistema'}</span>
+                      {log.actorRole && <small>{log.actorRole}</small>}
+                    </td>
+                    <td>
+                      <span>{log.entityType || '-'}</span>
+                      {log.entityId && <small>{log.entityId.slice(0, 8)}</small>}
+                    </td>
+                    <td>{summarizeAuditMetadata(log.metadata)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ===== MODAL: CRIAR / EDITAR ESTABELECIMENTO ===== */}
       <Modal isOpen={isFormOpen} onClose={() => setIsFormOpen(false)}
         title={editingEst ? `Editar — ${editingEst.name}` : 'Novo Estabelecimento'}>
@@ -882,11 +988,17 @@ export default function SuperAdmin() {
             </div>
             <div className="form-group">
               <label>Plano</label>
+              {selectedPlan && (
+                <div className="plan-limits-box compact">
+                  <strong>{selectedPlan.label}</strong>
+                  <span>Usuarios {formatLimit(selectedPlan.limits.maxUsers)} | Operadores {formatLimit(selectedPlan.limits.maxOperators)} | Produtos {formatLimit(selectedPlan.limits.maxProducts)} | Contas {formatLimit(selectedPlan.limits.maxPaymentAccounts)}</span>
+                </div>
+              )}
               <select className="form-control" value={formData.plan}
                 onChange={e => setFormData(p => ({ ...p, plan: e.target.value as Plan }))}>
-                <option value="basic">Básico</option>
-                <option value="premium">Premium</option>
-                <option value="enterprise">Enterprise</option>
+                {planOptions.map(plan => (
+                  <option key={plan.key} value={plan.key}>{plan.label}</option>
+                ))}
               </select>
             </div>
           </div>

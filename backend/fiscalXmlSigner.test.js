@@ -64,7 +64,7 @@ test('assina XML NFC-e com certificado A1 usando XMLDSig', () => {
     document,
     sale,
     items,
-    accessKey: '52260612345678000190650010000000011000000010',
+    accessKey: '52260612345678000190650010000000011000000015',
     protocol: 'SIM123',
     qrCodeUrl: 'https://homolog.sefaz.go.gov.br/nfce/qrcode?p=teste',
   });
@@ -78,7 +78,7 @@ test('assina XML NFC-e com certificado A1 usando XMLDSig', () => {
   assert.match(signed.xml, /<Signature xmlns="http:\/\/www\.w3\.org\/2000\/09\/xmldsig#">/);
   assert.match(signed.xml, new RegExp(`<SignatureMethod Algorithm="${SIGNATURE_ALGORITHM.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"></SignatureMethod>`));
   assert.match(signed.xml, new RegExp(`<DigestMethod Algorithm="${DIGEST_ALGORITHM.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"></DigestMethod>`));
-  assert.match(signed.xml, /<Reference URI="#NFe52260612345678000190650010000000011000000010">/);
+  assert.match(signed.xml, /<Reference URI="#NFe52260612345678000190650010000000011000000015">/);
   assert.match(signed.xml, /<X509Certificate>[A-Za-z0-9+/=]+<\/X509Certificate>/);
   assert.equal(verifySignedXml(signed.xml), true);
 });

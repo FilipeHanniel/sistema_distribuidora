@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildNfceXml } = require('./fiscalXmlBuilder');
 const { signXmlWithPfx } = require('./fiscalXmlSigner');
+const { validateFiscalXml } = require('./fiscalXmlValidator');
 
 const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
 
@@ -104,6 +105,19 @@ class SefazGoProvider {
       certificatePath: certificate.path,
       password: certificate.password,
     }).xml;
+    const xmlValidation = validateFiscalXml(signedXml);
+    if (!xmlValidation.valid) {
+      return {
+        status: 'rejected',
+        cStat: xmlValidation.errors[0].cStat || 'SIM-XSD',
+        reason: `Rejeicao tecnica do XML: ${xmlValidation.errors[0].message}`,
+        accessKey,
+        protocol: '',
+        qrCodeUrl,
+        xml: signedXml,
+        validationMessages: xmlValidation.errors,
+      };
+    }
     const responseXml = await postXml(`${this.baseUrl}/nfce/autorizacao`, makeSoapEnvelope(signedXml));
     return this.parseAuthorizationResponse({ responseXml, signedXml, accessKey, qrCodeUrl });
   }

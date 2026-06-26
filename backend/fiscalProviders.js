@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildNfceXml, onlyDigits } = require('./fiscalXmlBuilder');
 const { signXmlWithPfx } = require('./fiscalXmlSigner');
+const { validateFiscalXml } = require('./fiscalXmlValidator');
 const { SefazGoProvider } = require('./sefazGoProvider');
 
 const makeAccessKey = (settings, document, sale) => {
@@ -112,6 +113,19 @@ class FakeSefazProvider {
       certificatePath: settings.certificatePath,
       password: settings.certificatePassword,
     });
+    const xmlValidation = validateFiscalXml(signed.xml);
+    if (!xmlValidation.valid) {
+      return {
+        status: 'rejected',
+        cStat: xmlValidation.errors[0].cStat || 'SIM-XSD',
+        reason: `Rejeicao tecnica do XML: ${xmlValidation.errors[0].message}`,
+        accessKey,
+        protocol,
+        qrCodeUrl,
+        xml: signed.xml,
+        validationMessages: xmlValidation.errors,
+      };
+    }
 
     return {
       status: 'authorized',
