@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { User, Lock, AlertCircle } from 'lucide-react';
+import { Building2, User, Lock, AlertCircle } from 'lucide-react';
 import { apiRequest, getApiErrorMessage } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
 import './Login.css';
 
 export default function Login() {
+  const [establishment, setEstablishment] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -26,7 +27,7 @@ export default function Login() {
       const data = await apiRequest<{ user: Parameters<typeof loginStore.login>[0]; token: string }>('/login', {
         method: 'POST',
         auth: false,
-        body: { username, password },
+        body: { establishment, username, password },
       });
       loginStore.login(data.user, data.token);
     } catch (err) {
@@ -71,6 +72,22 @@ export default function Login() {
         )}
 
         <form className="login-form" onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label htmlFor="establishment">Estabelecimento</label>
+            <div className="input-with-icon">
+              <Building2 className="input-icon" size={18} />
+              <input
+                id="establishment"
+                type="text"
+                placeholder="Codigo do estabelecimento"
+                value={establishment}
+                onChange={(e) => setEstablishment(e.target.value)}
+                required
+                autoComplete="organization"
+              />
+            </div>
+          </div>
+
           <div className="form-group">
             <label htmlFor="username">Usuário</label>
             <div className="input-with-icon">

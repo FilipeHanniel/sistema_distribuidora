@@ -28,6 +28,16 @@ test('limite basic bloqueia acima do maximo configurado', () => {
   assert.equal(denied.limit, 3);
 });
 
+test('limites de equipe incluem o gestor do estabelecimento', () => {
+  assert.equal(getPlanDefinition('basic').limits.maxUsers, 4);
+  assert.equal(getPlanDefinition('basic').limits.maxOperators, 3);
+  assert.equal(checkPlanLimit('basic', 'maxUsers', 3, 1).allowed, true);
+  assert.equal(checkPlanLimit('basic', 'maxUsers', 4, 1).allowed, false);
+
+  assert.equal(getPlanDefinition('premium').limits.maxUsers, 7);
+  assert.equal(getPlanDefinition('premium').limits.maxOperators, 6);
+});
+
 test('assinatura suspensa bloqueia operacao', () => {
   assert.equal(normalizeSubscriptionStatus('desconhecido'), 'active');
   assert.equal(getSubscriptionAccess('active').canOperate, true);

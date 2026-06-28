@@ -244,7 +244,15 @@ const runXmllintSchemaValidation = (xmlPath, schemaPath) => {
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
   });
+  if (result.error) {
+    return {
+      available: false,
+      valid: false,
+      errors: [`xmllint indisponivel: ${result.error.message}`],
+    };
+  }
   return {
+    available: true,
     valid: result.status === 0,
     errors: result.status === 0 ? [] : String(result.stderr || result.stdout || '').split(/\r?\n/).filter(Boolean),
   };
@@ -266,6 +274,12 @@ const validateXmlWithSchema = (xml, schemaPath) => {
     const result = process.platform === 'win32'
       ? runPowerShellSchemaValidation(xmlPath, resolvedSchema)
       : runXmllintSchemaValidation(xmlPath, resolvedSchema);
+    if (result.available === false) {
+      return {
+        available: false,
+        errors: [makeMessage('XSD001', result.errors?.[0] || 'Validador XSD indisponivel no servidor.')],
+      };
+    }
     return {
       available: true,
       errors: (result.errors || []).map((message, index) => makeMessage(`XSD${String(index + 2).padStart(3, '0')}`, `Schema XSD: ${message}`)),

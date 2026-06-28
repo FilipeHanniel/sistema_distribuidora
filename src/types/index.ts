@@ -52,6 +52,7 @@ export interface User {
 export interface Establishment {
   id: string;
   name: string;
+  loginCode: string;
   ownerName: string;
   email?: string;
   phone?: string;

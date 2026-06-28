@@ -26,8 +26,8 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
       return;
     }
 
-    if (newPassword.length < 3) {
-      setError('A nova senha deve ter pelo menos 3 caracteres.');
+    if (newPassword.length < 8) {
+      setError('A nova senha deve ter pelo menos 8 caracteres.');
       return;
     }
 
@@ -74,6 +74,7 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
               <KeyRound size={18} />
               <input
                 type="password"
+                minLength={8}
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Digite sua senha atual"
@@ -90,7 +91,7 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Mínimo 3 caracteres"
+                placeholder="Mínimo 8 caracteres"
                 required
               />
             </div>

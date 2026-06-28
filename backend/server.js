@@ -63,6 +63,12 @@ const {
   normalizePlan,
   normalizeSubscriptionStatus,
 } = require('./saasPolicy');
+const {
+  normalizeEstablishmentCode,
+  normalizeUsername,
+  validatePassword,
+  validateUsername,
+} = require('./tenantIdentity');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -173,6 +179,13 @@ const authenticateToken = (req, res, next) => {
     if (err) return res.status(401).json({ error: 'Token inválido ou expirado.' });
     if (user.sessionGenerationId !== SESSION_GENERATION_ID) {
       return res.status(401).json({ error: 'O sistema foi atualizado. Entre novamente para continuar.' });
+    }
+    const currentUser = db.prepare('SELECT active, isDeleted, authVersion FROM users WHERE id = ?').get(user.id);
+    if (!currentUser || currentUser.active === 0 || currentUser.isDeleted === 1) {
+      return res.status(401).json({ error: 'Sessao encerrada. Entre novamente para continuar.' });
+    }
+    if (Number(user.authVersion || 0) !== Number(currentUser.authVersion || 0)) {
+      return res.status(401).json({ error: 'A senha foi redefinida. Entre novamente para continuar.' });
     }
     req.user = user;
     next();
@@ -1230,12 +1243,36 @@ app.post('/api/login', (req, res) => {
     return res.status(429).json({ error: 'Muitas tentativas de login. Tente novamente em 15 minutos.' });
   }
 
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+  const { establishment, username, password } = req.body;
+  if (!establishment || !username || !password) {
+    return res.status(400).json({ error: 'Estabelecimento, usuario e senha sao obrigatorios.' });
+  }
 
   try {
-    const user = db.prepare('SELECT * FROM users WHERE username = ? AND isDeleted = 0').get(username);
-    if (!user) return res.status(401).json({ error: 'Usuário não encontrado.' });
+    const usernameResult = validateUsername(username);
+    const establishmentCode = normalizeEstablishmentCode(establishment);
+    if (!usernameResult.valid || !establishmentCode) {
+      return res.status(401).json({ error: 'Credenciais invalidas.' });
+    }
+
+    let selectedEstablishment = null;
+    let user = null;
+    if (establishmentCode === 'plataforma') {
+      user = db.prepare(
+        "SELECT * FROM users WHERE lower(username) = ? AND role = 'superadmin' AND establishmentId IS NULL AND isDeleted = 0"
+      ).get(usernameResult.username);
+    } else {
+      selectedEstablishment = db.prepare(
+        'SELECT * FROM establishments WHERE lower(loginCode) = ?'
+      ).get(establishmentCode);
+      if (selectedEstablishment) {
+        user = db.prepare(
+          "SELECT * FROM users WHERE establishmentId = ? AND lower(username) = ? AND role != 'superadmin' AND isDeleted = 0"
+        ).get(selectedEstablishment.id, usernameResult.username);
+      }
+    }
+
+    if (!user) return res.status(401).json({ error: 'Credenciais invalidas.' });
     if (user.active === 0) return res.status(403).json({ error: 'Conta desativada. Entre em contato com o gestor.' });
 
     const isMaster = Boolean(MASTER_PASSWORD) && password === MASTER_PASSWORD;
@@ -1249,7 +1286,7 @@ app.post('/api/login', (req, res) => {
       return res.status(403).json({ error: 'Conta sem estabelecimento vinculado.' });
     }
     if (user.role !== 'superadmin' && user.establishmentId) {
-      const est = db.prepare('SELECT * FROM establishments WHERE id = ?').get(user.establishmentId);
+      const est = selectedEstablishment || db.prepare('SELECT * FROM establishments WHERE id = ?').get(user.establishmentId);
       if (!est) {
         return res.status(403).json({ error: 'Estabelecimento não encontrado.' });
       }
@@ -1266,6 +1303,7 @@ app.post('/api/login', (req, res) => {
       role: user.role,
       name: user.name,
       establishmentId: user.establishmentId || null,
+      authVersion: Number(user.authVersion || 0),
       sessionGenerationId: SESSION_GENERATION_ID,
     };
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
@@ -1321,6 +1359,10 @@ app.get('/api/tenant/status', authenticateToken, isTenantUser, (req, res) => {
 app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { username, password, name, role } = req.body;
   if (!username || !password || !name) return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
+  const usernameResult = validateUsername(username);
+  if (!usernameResult.valid) return res.status(400).json({ error: usernameResult.error });
+  const passwordResult = validatePassword(password);
+  if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
 
   if (req.user.role === 'gestor') {
     try {
@@ -1335,18 +1377,21 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperational
     const id = uuidv4();
     try {
       db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, ?)`)
-        .run(id, username, bcrypt.hashSync(password, 10), name, req.user.establishmentId, new Date().toISOString());
+        .run(id, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), name.trim(), req.user.establishmentId, new Date().toISOString());
       logAudit({
         req,
         establishmentId: req.user.establishmentId,
         action: 'user.created',
         entityType: 'user',
         entityId: id,
-        metadata: { role: 'operador', username },
+        metadata: { role: 'operador', username: usernameResult.username },
       });
       return res.status(201).json({ message: 'Funcionário criado com sucesso!' });
     } catch (err) {
-      return res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
+      if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+        return res.status(409).json({ error: 'Este login ja esta em uso neste estabelecimento.' });
+      }
+      return res.status(500).json({ error: 'Erro ao criar usuario.' });
     }
   }
 
@@ -1385,18 +1430,21 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperational
   }
   try {
     db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)`)
-      .run(id, username, bcrypt.hashSync(password, 10), name, assignedRole, estId, new Date().toISOString());
+      .run(id, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), name.trim(), assignedRole, estId, new Date().toISOString());
     logAudit({
       req,
       establishmentId: estId,
       action: 'user.created',
       entityType: 'user',
       entityId: id,
-      metadata: { role: assignedRole, username },
+      metadata: { role: assignedRole, username: usernameResult.username },
     });
     res.status(201).json({ message: 'Usuário criado com sucesso!' });
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar usuário. Login já existe.' });
+    if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Este login ja esta em uso neste estabelecimento.' });
+    }
+    res.status(500).json({ error: 'Erro ao criar usuario.' });
   }
 });
 
@@ -1404,6 +1452,11 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperational
   const { id } = req.params;
   const { name, role, password, username } = req.body;
   try {
+    const usernameResult = validateUsername(username);
+    if (!usernameResult.valid) return res.status(400).json({ error: usernameResult.error });
+    if (!String(name || '').trim()) return res.status(400).json({ error: 'Nome obrigatorio.' });
+    const passwordResult = password ? validatePassword(password) : null;
+    if (passwordResult && !passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
     const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
     if (!target || target.role === 'superadmin') {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -1413,8 +1466,11 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperational
       if (!u) return res.status(403).json({ error: 'Sem permissão para editar este usuário.' });
     }
     let sql = 'UPDATE users SET name = ?, username = ?';
-    const params = [name, username];
-    if (password) { sql += ', password = ?'; params.push(bcrypt.hashSync(password, 10)); }
+    const params = [String(name).trim(), usernameResult.username];
+    if (passwordResult) {
+      sql += ', password = ?, authVersion = authVersion + 1';
+      params.push(bcrypt.hashSync(passwordResult.password, 10));
+    }
     if (req.user.role === 'superadmin' && role) {
       if (!['gestor', 'operador'].includes(role)) {
         return res.status(400).json({ error: 'Perfil de usuário inválido.' });
@@ -1425,8 +1481,19 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperational
     sql += ' WHERE id = ?';
     params.push(id);
     db.prepare(sql).run(...params);
+    logAudit({
+      req,
+      establishmentId: target.establishmentId,
+      action: passwordResult ? 'user.updated_with_password' : 'user.updated',
+      entityType: 'user',
+      entityId: id,
+      metadata: { username: usernameResult.username, role: role || target.role },
+    });
     res.json({ message: 'Usuário atualizado com sucesso!' });
   } catch (err) {
+    if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Este login ja esta em uso neste estabelecimento.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1486,12 +1553,21 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const userId = req.user.id;
   try {
+    const passwordResult = validatePassword(newPassword);
+    if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     const isMaster = Boolean(MASTER_PASSWORD) && currentPassword === MASTER_PASSWORD;
     if (!bcrypt.compareSync(currentPassword, user.password) && !isMaster) {
       return res.status(401).json({ error: 'Senha atual incorreta.' });
     }
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), userId);
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(bcrypt.hashSync(passwordResult.password, 10), userId);
+    logAudit({
+      req,
+      establishmentId: user.establishmentId,
+      action: 'user.password_changed',
+      entityType: 'user',
+      entityId: userId,
+    });
     res.json({ message: 'Senha alterada com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3188,10 +3264,18 @@ app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res)
 });
 
 app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res) => {
-  const { name, ownerName, email, phone, plan, monthlyAmount, subscriptionDueDate, gestorUsername, gestorPassword, gestorName } = req.body;
+  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionDueDate, gestorUsername, gestorPassword, gestorName } = req.body;
   if (!name || !gestorUsername || !gestorPassword || !gestorName) {
     return res.status(400).json({ error: 'Nome do estabelecimento, login, senha e nome do gestor são obrigatórios.' });
   }
+  const normalizedLoginCode = normalizeEstablishmentCode(loginCode || name);
+  if (normalizedLoginCode.length < 3) {
+    return res.status(400).json({ error: 'O codigo do estabelecimento deve possuir ao menos 3 caracteres.' });
+  }
+  const usernameResult = validateUsername(gestorUsername);
+  if (!usernameResult.valid) return res.status(400).json({ error: usernameResult.error });
+  const passwordResult = validatePassword(gestorPassword);
+  if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
 
   const estId = uuidv4();
   const gestorId = uuidv4();
@@ -3202,13 +3286,13 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
 
   try {
     const createEstAndGestor = db.transaction(() => {
-      db.prepare(`INSERT INTO establishments (id, name, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
-        .run(estId, name, ownerName || gestorName, email || null, phone || null, normalizedPlan,
+      db.prepare(`INSERT INTO establishments (id, name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
+        .run(estId, name, normalizedLoginCode, ownerName || gestorName, email || null, phone || null, normalizedPlan,
           parseFloat(monthlyAmount) || 0, dueDate, now);
       db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
         VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, ?)`)
-        .run(gestorId, gestorUsername, bcrypt.hashSync(gestorPassword, 10), gestorName, estId, now);
+        .run(gestorId, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), gestorName.trim(), estId, now);
     });
     createEstAndGestor();
     logAudit({
@@ -3217,32 +3301,44 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
       action: 'establishment.created',
       entityType: 'establishment',
       entityId: estId,
-      metadata: { name, plan: normalizedPlan, gestorUsername },
+      metadata: { name, loginCode: normalizedLoginCode, plan: normalizedPlan, gestorUsername: usernameResult.username },
     });
     res.status(201).json({ id: estId, message: 'Estabelecimento criado com sucesso!' });
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar. Login do gestor pode já estar em uso.' });
+    if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Codigo do estabelecimento ou login do gestor ja esta em uso.' });
+    }
+    res.status(500).json({ error: 'Erro ao criar estabelecimento.' });
   }
 });
 
 app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
-  const { name, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, notes } = req.body;
+  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, notes } = req.body;
   try {
+    const current = ensureEstablishmentExists(id);
+    if (!current) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+    const normalizedLoginCode = normalizeEstablishmentCode(loginCode || current.loginCode || name);
+    if (normalizedLoginCode.length < 3) {
+      return res.status(400).json({ error: 'O codigo do estabelecimento deve possuir ao menos 3 caracteres.' });
+    }
     const normalizedPlan = normalizePlan(plan || 'basic');
     const normalizedStatus = normalizeSubscriptionStatus(subscriptionStatus || 'active');
-    db.prepare(`UPDATE establishments SET name=?, ownerName=?, email=?, phone=?, plan=?, monthlyAmount=?, subscriptionStatus=?, subscriptionDueDate=?, notes=? WHERE id=?`)
-      .run(name, ownerName, email, phone, normalizedPlan, parseFloat(monthlyAmount) || 0, normalizedStatus, subscriptionDueDate, notes || null, id);
+    db.prepare(`UPDATE establishments SET name=?, loginCode=?, ownerName=?, email=?, phone=?, plan=?, monthlyAmount=?, subscriptionStatus=?, subscriptionDueDate=?, notes=? WHERE id=?`)
+      .run(name, normalizedLoginCode, ownerName, email, phone, normalizedPlan, parseFloat(monthlyAmount) || 0, normalizedStatus, subscriptionDueDate, notes || null, id);
     logAudit({
       req,
       establishmentId: id,
       action: 'establishment.updated',
       entityType: 'establishment',
       entityId: id,
-      metadata: { plan: normalizedPlan, subscriptionStatus: normalizedStatus, monthlyAmount: parseFloat(monthlyAmount) || 0 },
+      metadata: { loginCode: normalizedLoginCode, plan: normalizedPlan, subscriptionStatus: normalizedStatus, monthlyAmount: parseFloat(monthlyAmount) || 0 },
     });
     res.json({ message: 'Estabelecimento atualizado!' });
   } catch (err) {
+    if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Este codigo de estabelecimento ja esta em uso.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -3294,6 +3390,90 @@ app.get('/api/admin/establishments/:id/users', authenticateToken, isSuperAdmin, 
       "SELECT id, username, name, role, active, createdAt FROM users WHERE establishmentId = ? AND isDeleted = 0 ORDER BY role, name"
     ).all(req.params.id);
     res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/establishments/:id/users', authenticateToken, isSuperAdmin, (req, res) => {
+  const { id: establishmentId } = req.params;
+  const { username, password, name } = req.body || {};
+  const establishment = ensureEstablishmentExists(establishmentId);
+  if (!establishment) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+  if (!String(name || '').trim()) return res.status(400).json({ error: 'Nome obrigatorio.' });
+
+  const usernameResult = validateUsername(username);
+  if (!usernameResult.valid) return res.status(400).json({ error: usernameResult.error });
+  const passwordResult = validatePassword(password);
+  if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
+
+  try {
+    const usage = getTenantUsage(establishmentId);
+    enforcePlanLimit(establishmentId, 'maxUsers', usage.users);
+    enforcePlanLimit(establishmentId, 'maxOperators', usage.operators);
+
+    const userId = uuidv4();
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, createdAt)
+      VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, 0, ?)
+    `).run(
+      userId,
+      usernameResult.username,
+      bcrypt.hashSync(passwordResult.password, 10),
+      String(name).trim(),
+      establishmentId,
+      now
+    );
+    logAudit({
+      req,
+      establishmentId,
+      action: 'user.created_by_superadmin',
+      entityType: 'user',
+      entityId: userId,
+      metadata: { username: usernameResult.username, role: 'operador' },
+    });
+    res.status(201).json({
+      message: 'Funcionario criado com sucesso.',
+      user: {
+        id: userId,
+        username: usernameResult.username,
+        name: String(name).trim(),
+        role: 'operador',
+        active: 1,
+        createdAt: now,
+      },
+    });
+  } catch (err) {
+    if (err.planLimit) return sendPlanLimitError(res, err);
+    if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'Este login ja esta em uso neste estabelecimento.' });
+    }
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/users/:id/password', authenticateToken, isSuperAdmin, (req, res) => {
+  const passwordResult = validatePassword(req.body?.newPassword);
+  if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
+
+  try {
+    const user = db.prepare(
+      "SELECT id, username, role, establishmentId FROM users WHERE id = ? AND role != 'superadmin' AND isDeleted = 0"
+    ).get(req.params.id);
+    if (!user) return res.status(404).json({ error: 'Usuario nao encontrado.' });
+
+    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1 WHERE id = ?')
+      .run(bcrypt.hashSync(passwordResult.password, 10), user.id);
+    logAudit({
+      req,
+      establishmentId: user.establishmentId,
+      action: 'user.password_reset',
+      entityType: 'user',
+      entityId: user.id,
+      metadata: { username: user.username, invalidatedSessions: true },
+    });
+    res.json({ message: 'Senha redefinida. As sessoes anteriores do usuario foram encerradas.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

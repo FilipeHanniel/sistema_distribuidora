@@ -1,17 +1,17 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { Plus, Search, UserPlus, User as UserIcon, Edit2, Trash2, Power, PowerOff, ShieldCheck } from 'lucide-react';
 import { useUserStore } from '../store/useUserStore';
+import { apiRequest } from '../lib/api';
 import type { User } from '../types';
 import Modal from '../components/Modal';
 import './Users.css';
-
-const MAX_OPERADORES = 5;
 
 export default function Users() {
   const { users, fetchUsers, createUser, updateUser, toggleUserStatus, deleteUser } = useUserStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [maxOperators, setMaxOperators] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     username: '',
@@ -19,11 +19,17 @@ export default function Users() {
     name: '',
   });
 
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+  useEffect(() => {
+    fetchUsers();
+    apiRequest<{ plan: { limits: { maxOperators: number | null } } }>('/tenant/status')
+      .then(status => setMaxOperators(status.plan.limits.maxOperators))
+      .catch(error => console.error('Falha ao carregar limites do plano:', error));
+  }, [fetchUsers]);
 
   const operadores = users.filter(u => u.role === 'operador');
   const countAtivos = operadores.filter(u => u.active === 1).length;
-  const atLimit = operadores.length >= MAX_OPERADORES;
+  const atLimit = maxOperators !== null && operadores.length >= maxOperators;
+  const maxOperatorsLabel = maxOperators === null ? 'Ilimitado' : String(maxOperators);
 
   const handleOpenModal = (user?: User) => {
     if (user) {
@@ -45,6 +51,7 @@ export default function Users() {
       success = await updateUser(editingUser.id, formData);
     } else {
       if (!formData.password) { alert('A senha é obrigatória para novos funcionários.'); return; }
+      if (formData.password.length < 8) { alert('A senha deve possuir pelo menos 8 caracteres.'); return; }
       success = await createUser({ ...formData, role: 'operador' });
     }
     if (success) handleCloseModal();
@@ -60,13 +67,13 @@ export default function Users() {
       <div className="page-header">
         <div className="header-info">
           <h1>Funcionários</h1>
-          <p className="subtitle">Cadastre e gerencie operadores do ponto de venda — máximo de {MAX_OPERADORES} funcionários</p>
+          <p className="subtitle">Cadastre e gerencie operadores do ponto de venda — limite do plano: {maxOperatorsLabel}</p>
         </div>
         <button
           className="btn btn-primary"
           onClick={() => handleOpenModal()}
           disabled={atLimit}
-          title={atLimit ? `Limite de ${MAX_OPERADORES} funcionários atingido` : 'Novo funcionário'}
+          title={atLimit ? `Limite de ${maxOperatorsLabel} funcionários atingido` : 'Novo funcionário'}
         >
           <Plus size={18} /> Novo Funcionário
         </button>
@@ -79,7 +86,7 @@ export default function Users() {
           <div className="widget-content">
             <span className="widget-title">Funcionários Cadastrados</span>
             <span className="widget-value">
-              {operadores.length} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>/ {MAX_OPERADORES}</span>
+              {operadores.length} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>/ {maxOperatorsLabel}</span>
             </span>
           </div>
         </div>
@@ -97,7 +104,7 @@ export default function Users() {
           <div className="widget-content">
             <span className="widget-title">Vagas Disponíveis</span>
             <span className="widget-value" style={{ color: atLimit ? '#dc2626' : undefined }}>
-              {Math.max(0, MAX_OPERADORES - operadores.length)}
+              {maxOperators === null ? '∞' : Math.max(0, maxOperators - operadores.length)}
             </span>
           </div>
         </div>
@@ -110,7 +117,7 @@ export default function Users() {
           color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem',
         }}>
           <UserPlus size={16} />
-          Você atingiu o limite de {MAX_OPERADORES} funcionários. Exclua um para cadastrar outro.
+          Você atingiu o limite de {maxOperatorsLabel} funcionários. Exclua um para cadastrar outro.
         </div>
       )}
 
@@ -200,6 +207,7 @@ export default function Users() {
             <div className="form-group">
               <label>{editingUser ? 'Nova Senha (opcional)' : 'Senha de Acesso'}</label>
               <input type="password" className="form-control" value={formData.password}
+                minLength={editingUser ? undefined : 8}
                 onChange={e => setFormData({ ...formData, password: e.target.value })}
                 required={!editingUser} placeholder={editingUser ? '••••••••' : 'Senha'} />
             </div>

@@ -21,6 +21,7 @@ backend/.env.*
 # Backend
 backend/node_modules
 backend/*.sqlite
+backend/*.sqlite.backup-*
 backend/*.sqlite-journal
 backend/certs/
 backend/private/

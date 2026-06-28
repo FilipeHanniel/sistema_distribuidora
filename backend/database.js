@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const { normalizeEstablishmentCode } = require('./tenantIdentity');
 
 const db = new Database(path.join(__dirname, 'banco.sqlite'));
 db.pragma('foreign_keys = ON');
@@ -13,6 +14,7 @@ const initDB = () => {
     CREATE TABLE IF NOT EXISTS establishments (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      loginCode TEXT,
       ownerName TEXT,
       email TEXT,
       phone TEXT,
@@ -28,13 +30,14 @@ const initDB = () => {
   db.prepare(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
-      username TEXT UNIQUE,
+      username TEXT,
       password TEXT,
       name TEXT,
       role TEXT,
       establishmentId TEXT,
       active INTEGER DEFAULT 1,
       isDeleted INTEGER DEFAULT 0,
+      authVersion INTEGER DEFAULT 0,
       createdAt TEXT
     )
   `).run();
@@ -274,9 +277,11 @@ const initDB = () => {
   // MIGRAÇÕES
   // ============================================================
   const migrations = [
+    'ALTER TABLE establishments ADD COLUMN loginCode TEXT',
     'ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1',
     'ALTER TABLE users ADD COLUMN isDeleted INTEGER DEFAULT 0',
     'ALTER TABLE users ADD COLUMN establishmentId TEXT',
+    'ALTER TABLE users ADD COLUMN authVersion INTEGER DEFAULT 0',
     'ALTER TABLE products ADD COLUMN establishmentId TEXT',
     'ALTER TABLE products ADD COLUMN ncm TEXT',
     'ALTER TABLE products ADD COLUMN cfop TEXT',
@@ -318,8 +323,46 @@ const initDB = () => {
     try { db.prepare(sql).run(); } catch (e) {}
   }
 
+  // Versoes antigas tornavam o login globalmente unico. A tabela e recriada
+  // para permitir o mesmo login em estabelecimentos diferentes.
+  const usersTableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql || '';
+  if (/username\s+TEXT\s+UNIQUE/i.test(usersTableSql)) {
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.exec(`
+        BEGIN;
+        DROP TABLE IF EXISTS users_new;
+        CREATE TABLE users_new (
+          id TEXT PRIMARY KEY,
+          username TEXT,
+          password TEXT,
+          name TEXT,
+          role TEXT,
+          establishmentId TEXT,
+          active INTEGER DEFAULT 1,
+          isDeleted INTEGER DEFAULT 0,
+          authVersion INTEGER DEFAULT 0,
+          createdAt TEXT
+        );
+        INSERT INTO users_new (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, createdAt)
+          SELECT id, username, password, name, role, establishmentId,
+            COALESCE(active, 1), COALESCE(isDeleted, 0), COALESCE(authVersion, 0), createdAt
+          FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw error;
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  }
+
   const indexes = [
     'CREATE INDEX IF NOT EXISTS idx_users_establishment ON users(establishmentId, isDeleted, role)',
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_scope ON users(COALESCE(establishmentId, '__platform__'), lower(username)) WHERE isDeleted = 0",
     'CREATE INDEX IF NOT EXISTS idx_products_establishment ON products(establishmentId, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_sales_establishment ON sales(establishmentId, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(saleId)',
@@ -350,6 +393,20 @@ const initDB = () => {
     `).run(DEFAULT_EST_ID, 'Estabelecimento Padrão', 'Gestor Padrão', 'basic', 0, 'active',
       dueDate, new Date().toISOString());
   }
+
+  // Todo estabelecimento recebe um codigo curto e unico para o login.
+  const usedLoginCodes = new Set();
+  const establishmentRows = db.prepare('SELECT id, name, loginCode FROM establishments ORDER BY createdAt, id').all();
+  const updateLoginCode = db.prepare('UPDATE establishments SET loginCode = ? WHERE id = ?');
+  for (const establishment of establishmentRows) {
+    const base = normalizeEstablishmentCode(establishment.loginCode || establishment.name) || 'estabelecimento';
+    let candidate = base;
+    let suffix = 2;
+    while (usedLoginCodes.has(candidate)) candidate = `${base}-${suffix++}`;
+    usedLoginCodes.add(candidate);
+    if (establishment.loginCode !== candidate) updateLoginCode.run(candidate, establishment.id);
+  }
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_establishments_login_code ON establishments(lower(loginCode))').run();
 
   // Migrar roles legados
   try {

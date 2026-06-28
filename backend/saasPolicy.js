@@ -4,8 +4,8 @@ const PLAN_CATALOG = {
     label: 'Basico',
     description: 'Operacao inicial para um estabelecimento pequeno.',
     limits: {
-      maxUsers: 6,
-      maxOperators: 5,
+      maxUsers: 4,
+      maxOperators: 3,
       maxProducts: 500,
       maxPaymentAccounts: 3,
     },
@@ -21,8 +21,8 @@ const PLAN_CATALOG = {
     label: 'Premium',
     description: 'Operacao com equipe maior e mais contas de recebimento.',
     limits: {
-      maxUsers: 16,
-      maxOperators: 15,
+      maxUsers: 7,
+      maxOperators: 6,
       maxProducts: 3000,
       maxPaymentAccounts: 6,
     },

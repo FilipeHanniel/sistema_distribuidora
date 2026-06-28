@@ -723,6 +723,7 @@
 [data-theme="dark"] .badge-sub-suspended   { background: rgba(153,27,27,0.2);  color: #f87171; }
 
 .est-name   { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.15rem; }
+.est-login-code { display: flex; align-items: center; gap: 0.3rem; color: var(--primary); font-size: 0.75rem; font-family: monospace; margin-bottom: 0.2rem; }
 .est-owner  { font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.2rem; }
 .est-contact { font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.3rem; margin-bottom: 0.1rem; }
 
@@ -956,6 +957,40 @@
 .form-section-title:first-child { margin-top: 0; }
 
 /* ---- Users modal ---- */
+.est-users-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.85rem;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.est-users-toolbar > div { display: flex; flex-direction: column; gap: 0.15rem; }
+.est-users-toolbar strong { color: var(--text-primary); font-size: 0.85rem; }
+.est-users-toolbar span { color: var(--text-secondary); font-size: 0.75rem; }
+
+.est-user-editor {
+  padding: 0.85rem 0;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.est-user-editor small { color: var(--text-secondary); font-size: 0.72rem; }
+.compact-actions { margin-top: 0.75rem; }
+.user-form-error {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+[data-theme="dark"] .user-form-error { background: rgba(185,28,28,0.12); border-color: rgba(248,113,113,0.3); color: #fca5a5; }
+
+.btn-icon { width: 2rem; height: 2rem; padding: 0; justify-content: center; flex: 0 0 2rem; }
 .est-users-list  { display: flex; flex-direction: column; gap: 0.6rem; }
 
 .est-user-row {
@@ -1008,4 +1043,6 @@
   .billing-summary { grid-template-columns: 1fr; }
   .sa-header h1 { font-size: 1.5rem; }
   .billing-table { font-size: 0.78rem; }
+  .est-users-toolbar { align-items: stretch; flex-direction: column; }
+  .est-user-row { align-items: flex-start; flex-wrap: wrap; }
 }

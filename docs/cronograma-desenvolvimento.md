@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 26/06/2026
+Atualizado em: 28/06/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -56,13 +56,14 @@ Status: em implementacao
 
 Objetivo: transformar o sistema em plataforma comercial para multiplos estabelecimentos.
 
-- Refinar onboarding do SuperAdmin.
-- Criar planos e limites por plano. Concluido em 26/06/2026 com catalogo inicial basic/premium/enterprise.
+- Refinar onboarding do SuperAdmin. Parcial em 28/06/2026 com codigo de acesso por estabelecimento, criacao de funcionarios e reset de senha.
+- Criar planos e limites por plano. Concluido em 28/06/2026 com basic (gestor + 3), premium (gestor + 6) e enterprise ilimitado.
 - Implementar bloqueio por inadimplencia. Parcial em 26/06/2026: assinatura suspensa bloqueia operacao; atraso segue como periodo de tolerancia.
 - Melhorar dashboard do SuperAdmin com metricas de plataforma.
 - Criar configuracoes por estabelecimento.
-- Revisar isolamento de dados por tenant.
-- Criar trilha de auditoria para acoes sensiveis. Iniciado em 26/06/2026 com registros administrativos, produtos, contas de recebimento e vendas.
+- Separar login por estabelecimento e permitir o mesmo nome de usuario em contas diferentes. Concluido em 28/06/2026.
+- Revisar isolamento de dados por tenant. Migracao de identidade validada em 28/06/2026; testes automatizados de rotas ainda pendentes.
+- Criar trilha de auditoria para acoes sensiveis. Ampliado em 28/06/2026 com criacao de usuarios e redefinicao de senha.
 
 ## Fase 5 - Operacao do estabelecimento
 
@@ -121,7 +122,7 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 4 - Produto SaaS e multiempresa, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Testar limites de plano no VPS com basic/premium/enterprise.
+1. Implantar e testar no VPS a migracao de login por estabelecimento, reset de senha e limites basic/premium/enterprise.
 2. Criar tela de configuracoes por estabelecimento para dados comerciais e preferencias do sistema.
 3. Revisar isolamento de dados por tenant com testes automatizados.
 4. Criar fluxo de cobranca da plataforma com vencimento, tolerancia e suspensao automatica.

@@ -30,12 +30,18 @@ cd /var/www/sistema_distribuidora
 bash tools/backup-sqlite.sh
 git pull --rebase
 npm install
+cd backend
+npm install
+npm test
+cd ..
 npm run build
-pm2 restart sistema-distribuidora
+pm2 restart sistema-distribuidora --update-env
 pm2 save
 ```
 
 Ao reiniciar o backend, as sessoes abertas antes da atualizacao sao invalidadas. Em ate 30 segundos, as abas abertas retornam automaticamente para a tela de login. O `index.html` tambem e servido sem cache para evitar que o navegador continue usando uma interface antiga depois do deploy.
+
+Na atualizacao que introduz login por estabelecimento, o backend migra a unicidade dos usuarios e gera um codigo para cada estabelecimento existente. O backup anterior ao `git pull` e obrigatorio. Depois do deploy, consulte os codigos no painel do SuperAdmin. O acesso do SuperAdmin usa o estabelecimento `plataforma`.
 
 Se tambem houver atualizacao no servidor fake da SEFAZ:
 
@@ -54,6 +60,9 @@ pm2 logs sistema-distribuidora --lines 50
 Teste no navegador:
 
 - Login
+- Login com o codigo correto do estabelecimento e rejeicao com codigo de outra conta
+- Criacao de funcionario e reset de senha pelo SuperAdmin
+- Limites de equipe dos planos Basico e Premium
 - PDV
 - Venda simples
 - Pagamento Pix/cartao fake ou Mercado Pago teste

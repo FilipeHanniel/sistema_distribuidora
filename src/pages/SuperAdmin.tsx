@@ -5,7 +5,7 @@ import {
   Eye, Crown, AlertTriangle, CheckCircle2, DollarSign,
   CreditCard, Receipt, Banknote, X, Users, UserPlus,
   BarChart3, ArrowUpRight, ArrowDownRight, Store, Activity,
-  Target, PackageSearch, ClipboardList
+  Target, PackageSearch, ClipboardList, KeyRound
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import type { AuditLog, Establishment, PlanDefinition } from '../types';
@@ -116,6 +116,7 @@ type SubscriptionStatus = Establishment['subscriptionStatus'];
 
 interface EstablishmentForm {
   name: string;
+  loginCode: string;
   ownerName: string;
   email: string;
   phone: string;
@@ -130,7 +131,7 @@ interface EstablishmentForm {
 }
 
 const emptyForm: EstablishmentForm = {
-  name: '', ownerName: '', email: '', phone: '', plan: 'basic',
+  name: '', loginCode: '', ownerName: '', email: '', phone: '', plan: 'basic',
   monthlyAmount: '', subscriptionStatus: 'active', subscriptionDueDate: '', notes: '',
   gestorUsername: '', gestorPassword: '', gestorName: '',
 };
@@ -166,6 +167,10 @@ export default function SuperAdmin() {
   });
   const [payForm, setPayForm] = useState({ amount: '', notes: '' });
   const [payFormOpen, setPayFormOpen] = useState(false);
+  const [userFormMode, setUserFormMode] = useState<'create' | 'reset' | null>(null);
+  const [userForm, setUserForm] = useState({ userId: '', name: '', username: '', password: '' });
+  const [userFormError, setUserFormError] = useState('');
+  const [userFormSaving, setUserFormSaving] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -204,7 +209,7 @@ export default function SuperAdmin() {
   const openEdit = (est: ManagedEstablishment) => {
     setEditingEst(est);
     setFormData({
-      name: est.name, ownerName: est.ownerName || '', email: est.email || '',
+      name: est.name, loginCode: est.loginCode || '', ownerName: est.ownerName || '', email: est.email || '',
       phone: est.phone || '', plan: est.plan,
       monthlyAmount: est.monthlyAmount ? String(est.monthlyAmount) : '',
       subscriptionStatus: est.subscriptionStatus,
@@ -225,6 +230,9 @@ export default function SuperAdmin() {
 
   const openUsersModal = async (est: ManagedEstablishment) => {
     setSelectedEst(est);
+    setUserFormMode(null);
+    setUserFormError('');
+    setUserForm({ userId: '', name: '', username: '', password: '' });
     setIsUsersModalOpen(true);
     const res = await fetch(`${API}/admin/establishments/${est.id}/users`, { headers: getHeaders() });
     if (res.ok) setEstUsers(await res.json());
@@ -336,6 +344,50 @@ export default function SuperAdmin() {
     );
   };
 
+  const reloadEstablishmentUsers = async (establishmentId: string) => {
+    const res = await fetch(`${API}/admin/establishments/${establishmentId}/users`, { headers: getHeaders() });
+    if (res.ok) setEstUsers(await res.json());
+  };
+
+  const openCreateUser = () => {
+    setUserFormMode('create');
+    setUserFormError('');
+    setUserForm({ userId: '', name: '', username: '', password: '' });
+  };
+
+  const openPasswordReset = (user: EstUser) => {
+    setUserFormMode('reset');
+    setUserFormError('');
+    setUserForm({ userId: user.id, name: user.name, username: user.username, password: '' });
+  };
+
+  const handleUserFormSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedEst || !userFormMode) return;
+    setUserFormSaving(true);
+    setUserFormError('');
+    const endpoint = userFormMode === 'create'
+      ? `${API}/admin/establishments/${selectedEst.id}/users`
+      : `${API}/admin/users/${userForm.userId}/password`;
+    const method = userFormMode === 'create' ? 'POST' : 'PATCH';
+    const body = userFormMode === 'create'
+      ? { name: userForm.name, username: userForm.username, password: userForm.password }
+      : { newPassword: userForm.password };
+    try {
+      const res = await fetch(endpoint, { method, headers: getHeaders(), body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Nao foi possivel salvar o usuario.');
+      await reloadEstablishmentUsers(selectedEst.id);
+      await loadData();
+      setUserFormMode(null);
+      setUserForm({ userId: '', name: '', username: '', password: '' });
+    } catch (error) {
+      setUserFormError(error instanceof Error ? error.message : 'Nao foi possivel salvar o usuario.');
+    } finally {
+      setUserFormSaving(false);
+    }
+  };
+
   const platformCards = stats ? [
     {
       label: `Faturamento (${periodLabel})`,
@@ -387,8 +439,8 @@ export default function SuperAdmin() {
   ] : [];
 
   const planOptions = plans.length > 0 ? plans : [
-    { key: 'basic', label: 'Basico', description: '', limits: { maxUsers: 6, maxOperators: 5, maxProducts: 500, maxPaymentAccounts: 3 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: false } },
-    { key: 'premium', label: 'Premium', description: '', limits: { maxUsers: 16, maxOperators: 15, maxProducts: 3000, maxPaymentAccounts: 6 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: true } },
+    { key: 'basic', label: 'Basico', description: '', limits: { maxUsers: 4, maxOperators: 3, maxProducts: 500, maxPaymentAccounts: 3 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: false } },
+    { key: 'premium', label: 'Premium', description: '', limits: { maxUsers: 7, maxOperators: 6, maxProducts: 3000, maxPaymentAccounts: 6 }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: true } },
     { key: 'enterprise', label: 'Enterprise', description: '', limits: { maxUsers: null, maxOperators: null, maxProducts: null, maxPaymentAccounts: null }, features: { fiscal: true, aiReports: true, mercadoPagoPix: true, mercadoPagoPoint: true } },
   ] as PlanDefinition[];
 
@@ -410,7 +462,10 @@ export default function SuperAdmin() {
     'product.deleted': 'Produto removido',
     'sale.created': 'Venda registrada',
     'user.created': 'Usuario criado',
+    'user.created_by_superadmin': 'Usuario criado pelo SuperAdmin',
     'user.updated': 'Usuario atualizado',
+    'user.updated_with_password': 'Usuario e senha atualizados',
+    'user.password_reset': 'Senha redefinida pelo SuperAdmin',
     'user.activated': 'Usuario ativado',
     'user.deactivated': 'Usuario desativado',
     'user.deleted': 'Usuario removido',
@@ -803,6 +858,7 @@ export default function SuperAdmin() {
                   </div>
 
                   <div className="est-name">{est.name}</div>
+                  <div className="est-login-code"><Building2 size={12} />{est.loginCode}</div>
                   {est.ownerName && <div className="est-owner">{est.ownerName}</div>}
                   {est.email && <div className="est-contact"><Mail size={12} />{est.email}</div>}
                   {est.phone && <div className="est-contact"><Phone size={12} />{est.phone}</div>}
@@ -979,6 +1035,12 @@ export default function SuperAdmin() {
               onChange={e => setFormData(p => ({ ...p, name: e.target.value }))}
               placeholder="Ex: Distribuidora São João" />
           </div>
+          <div className="form-group">
+            <label>Codigo de acesso *</label>
+            <input className="form-control" required value={formData.loginCode}
+              onChange={e => setFormData(p => ({ ...p, loginCode: e.target.value }))}
+              placeholder="Ex: distribuidora-sao-joao" />
+          </div>
           <div className="form-row">
             <div className="form-group">
               <label>Responsável</label>
@@ -1109,6 +1171,52 @@ export default function SuperAdmin() {
       {/* ===== MODAL: USUÁRIOS ===== */}
       <Modal isOpen={isUsersModalOpen} onClose={() => setIsUsersModalOpen(false)}
         title={`Usuários — ${selectedEst?.name}`}>
+        <div className="est-users-toolbar">
+          <div>
+            <strong>{estUsers.length} de {formatLimit(selectedEst?.planDefinition?.limits.maxUsers)} usuarios</strong>
+            <span>O gestor ja esta incluido neste total.</span>
+          </div>
+          <button className="btn btn-primary btn-sm" type="button" onClick={openCreateUser}>
+            <UserPlus size={14} /> Adicionar funcionario
+          </button>
+        </div>
+
+        {userFormMode && (
+          <form className="est-user-editor" onSubmit={handleUserFormSubmit}>
+            <div className="form-section-title">
+              {userFormMode === 'create' ? 'Novo funcionario' : `Redefinir senha de ${userForm.name}`}
+            </div>
+            {userFormError && <div className="user-form-error">{userFormError}</div>}
+            {userFormMode === 'create' && (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Nome *</label>
+                  <input className="form-control" required value={userForm.name}
+                    onChange={e => setUserForm(p => ({ ...p, name: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label>Login *</label>
+                  <input className="form-control" required value={userForm.username}
+                    onChange={e => setUserForm(p => ({ ...p, username: e.target.value }))} />
+                </div>
+              </div>
+            )}
+            <div className="form-group">
+              <label>Senha temporaria *</label>
+              <input className="form-control" type="password" minLength={8} required value={userForm.password}
+                autoComplete="new-password"
+                onChange={e => setUserForm(p => ({ ...p, password: e.target.value }))} />
+              <small>Minimo de 8 caracteres.</small>
+            </div>
+            <div className="form-actions compact-actions">
+              <button className="btn btn-secondary" type="button" onClick={() => setUserFormMode(null)}>Cancelar</button>
+              <button className="btn btn-primary" type="submit" disabled={userFormSaving}>
+                {userFormSaving ? 'Salvando...' : userFormMode === 'create' ? 'Criar usuario' : 'Redefinir senha'}
+              </button>
+            </div>
+          </form>
+        )}
+
         <div className="est-users-list">
           {estUsers.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>Nenhum usuário.</p>
@@ -1123,6 +1231,10 @@ export default function SuperAdmin() {
               <span style={{ fontSize: '0.75rem', color: u.active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
                 {u.active ? 'Ativo' : 'Inativo'}
               </span>
+              <button className="btn btn-secondary btn-icon btn-sm" type="button"
+                onClick={() => openPasswordReset(u)} title="Redefinir senha" aria-label={`Redefinir senha de ${u.name}`}>
+                <KeyRound size={14} />
+              </button>
             </div>
           ))}
         </div>
