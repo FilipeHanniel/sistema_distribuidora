@@ -466,6 +466,7 @@ export default function SuperAdmin() {
     'user.updated': 'Usuario atualizado',
     'user.updated_with_password': 'Usuario e senha atualizados',
     'user.password_reset': 'Senha redefinida pelo SuperAdmin',
+    'settings.updated': 'Configuracoes do estabelecimento atualizadas',
     'user.activated': 'Usuario ativado',
     'user.deactivated': 'Usuario desativado',
     'user.deleted': 'Usuario removido',

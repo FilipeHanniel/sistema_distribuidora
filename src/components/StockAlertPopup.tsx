@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
+import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import './StockAlertPopup.css';
 
 export default function StockAlertPopup() {
   const { products } = useInventoryStore();
+  const threshold = useSettingsStore(state => state.settings?.lowStockThreshold ?? DEFAULT_UI_SETTINGS.lowStockThreshold);
   const [dismissedAtCount, setDismissedAtCount] = useState<number | null>(null);
 
-  const lowStockProducts = products.filter(p => p.stock <= 5);
+  const lowStockProducts = products.filter(p => p.stock <= threshold);
   const isHidden = dismissedAtCount !== null && lowStockProducts.length <= dismissedAtCount;
 
   if (lowStockProducts.length === 0 || isHidden) {

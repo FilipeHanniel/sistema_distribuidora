@@ -95,6 +95,19 @@ export interface TenantUsage {
   paymentAccounts: number;
 }
 
+export interface TenantSettings {
+  establishmentId: string;
+  name: string;
+  loginCode: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  lowStockThreshold: number;
+  receiptAutoCloseSeconds: number;
+  receiptFooter: string;
+  updatedAt?: string;
+}
+
 export interface AuditLog {
   id: string;
   establishmentId?: string | null;

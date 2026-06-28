@@ -20,6 +20,7 @@ interface AuthState {
   user: AuthUser | null;
   token: string | null;
   login: (user: AuthUser, token: string) => void;
+  updateEstablishmentName: (name: string) => void;
   logout: () => void;
   isAuthenticated: () => boolean;
   isSuperAdmin: () => boolean;
@@ -34,6 +35,9 @@ export const useAuthStore = create<AuthState>()(
       token: null,
 
       login: (user, token) => set({ user, token }),
+      updateEstablishmentName: (name) => set(state => ({
+        user: state.user ? { ...state.user, establishmentName: name } : null,
+      })),
       logout: () => set({ user: null, token: null }),
       isAuthenticated: () => !!get().token,
       isSuperAdmin: () => get().user?.role === 'superadmin',

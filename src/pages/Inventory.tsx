@@ -4,6 +4,7 @@ import ProductList from '../components/ProductList';
 import ProductForm from '../components/ProductForm';
 import Modal from '../components/Modal';
 import { useInventoryStore } from '../store/useInventoryStore';
+import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import type { Product } from '../types';
 import './Inventory.css';
 
@@ -17,6 +18,7 @@ export default function Inventory() {
   const [amount, setAmount] = useState<number>(1);
 
   const { addProduct, updateProduct, updateStock, products } = useInventoryStore();
+  const lowStockThreshold = useSettingsStore(state => state.settings?.lowStockThreshold ?? DEFAULT_UI_SETTINGS.lowStockThreshold);
 
   const handleOpenForm = (product?: Product) => {
     if (product) {
@@ -57,7 +59,7 @@ export default function Inventory() {
 
   const widgets = [
     { title: 'Total de Produtos', value: products.length },
-    { title: 'Em Estoque Baixo', value: products.filter(p => p.stock <= 10 && p.stock > 0).length },
+    { title: 'Em Estoque Baixo', value: products.filter(p => p.stock <= lowStockThreshold && p.stock > 0).length },
     { title: 'Esgotados', value: products.filter(p => p.stock === 0).length },
   ];
 

@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
-  Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards
+  Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards, SlidersHorizontal
 } from 'lucide-react';
 import './layout.css';
 
@@ -17,6 +17,7 @@ import SuperAdmin from '../pages/SuperAdmin';
 import PixSettings from '../pages/PixSettings';
 import FiscalSettings from '../pages/FiscalSettings';
 import PaymentTransactions from '../pages/PaymentTransactions';
+import EstablishmentSettings from '../pages/EstablishmentSettings';
 import StockAlertPopup from '../components/StockAlertPopup';
 import SaleSuccessPopup from '../components/SaleSuccessPopup';
 import PasswordModal from '../components/PasswordModal';
@@ -26,6 +27,7 @@ import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useUserStore } from '../store/useUserStore';
+import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import { apiRequest } from '../lib/api';
 import type { AppNotification } from '../types';
 
@@ -39,6 +41,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/pix': 'Recebimentos',
   '/transactions': 'Transacoes e Conciliacao',
   '/fiscal': 'Fiscal NFC-e',
+  '/settings': 'Configuracoes do Estabelecimento',
   '/superadmin': 'Painel Super Admin',
 };
 
@@ -53,6 +56,7 @@ export default function AppLayout() {
   const { fetchSales, clearSalesSession } = useSalesStore();
   const { user, logout, isAuthenticated, isSuperAdmin, isGestor, isOperador } = useAuthStore();
   const { fetchUsers, clearUsers } = useUserStore();
+  const { settings, fetchSettings, clearSettings } = useSettingsStore();
   const { lastSale, showSuccessPopup, closeSuccessPopup } = useSalesStore();
 
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -72,12 +76,14 @@ export default function AppLayout() {
     clearProducts();
     clearSalesSession();
     clearUsers();
+    clearSettings();
     setNotifications([]);
 
     if (!isAuthenticated()) return;
 
     if (!superAdmin) {
       fetchProducts();
+      fetchSettings().catch(() => undefined);
       if (gestor) {
         fetchSales();
         fetchUsers();
@@ -91,6 +97,8 @@ export default function AppLayout() {
     clearSalesSession,
     fetchUsers,
     clearUsers,
+    fetchSettings,
+    clearSettings,
     isAuthenticated,
     superAdmin,
     gestor,
@@ -162,6 +170,7 @@ export default function AppLayout() {
       { to: '/transactions', icon: <WalletCards size={20} />, label: 'Transacoes' },
       { to: '/fiscal', icon: <FileText size={20} />, label: 'Fiscal NFC-e' },
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
+      { to: '/settings', icon: <SlidersHorizontal size={20} />, label: 'Configuracoes' },
     ];
   } else {
     // operador
@@ -192,6 +201,7 @@ export default function AppLayout() {
     clearProducts();
     clearSalesSession();
     clearUsers();
+    clearSettings();
     setNotifications([]);
     logout();
   };
@@ -364,6 +374,7 @@ export default function AppLayout() {
               <Route path="/pix" element={gestor ? <PixSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/transactions" element={gestor ? <PaymentTransactions /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/fiscal" element={gestor ? <FiscalSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/settings" element={gestor ? <EstablishmentSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
 
               {/* Shared routes */}
               <Route path="/sales" element={!superAdmin ? <Sales /> : <Navigate to="/superadmin" />} />
@@ -390,6 +401,10 @@ export default function AppLayout() {
             items={lastSale.items}
             createdAt={lastSale.createdAt}
             fiscalDocument={lastSale.fiscalDocument}
+            establishmentName={settings?.name || user?.establishmentName || ''}
+            receiptFooter={settings?.receiptFooter || DEFAULT_UI_SETTINGS.receiptFooter}
+            autoClose={(settings?.receiptAutoCloseSeconds ?? DEFAULT_UI_SETTINGS.receiptAutoCloseSeconds) > 0}
+            autoCloseSeconds={settings?.receiptAutoCloseSeconds ?? DEFAULT_UI_SETTINGS.receiptAutoCloseSeconds}
             onClose={closeSuccessPopup}
           />
         )}

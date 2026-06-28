@@ -191,6 +191,18 @@ const initDB = () => {
   `).run();
 
   db.prepare(`
+    CREATE TABLE IF NOT EXISTS tenant_settings (
+      establishmentId TEXT PRIMARY KEY,
+      lowStockThreshold INTEGER NOT NULL DEFAULT 5,
+      receiptAutoCloseSeconds INTEGER NOT NULL DEFAULT 5,
+      receiptFooter TEXT DEFAULT '',
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       establishmentId TEXT,

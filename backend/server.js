@@ -69,6 +69,10 @@ const {
   validatePassword,
   validateUsername,
 } = require('./tenantIdentity');
+const {
+  DEFAULT_TENANT_SETTINGS,
+  validateTenantSettings,
+} = require('./tenantSettingsPolicy');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -254,6 +258,29 @@ const getTenantUsage = (establishmentId) => ({
   paymentAccounts: db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ? AND active = 1')
     .get(establishmentId).c,
 });
+
+const getTenantSettings = (establishmentId) => {
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT OR IGNORE INTO tenant_settings (
+      establishmentId, lowStockThreshold, receiptAutoCloseSeconds, receiptFooter, createdAt, updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    establishmentId,
+    DEFAULT_TENANT_SETTINGS.lowStockThreshold,
+    DEFAULT_TENANT_SETTINGS.receiptAutoCloseSeconds,
+    DEFAULT_TENANT_SETTINGS.receiptFooter,
+    now,
+    now
+  );
+  return db.prepare(`
+    SELECT e.id as establishmentId, e.name, e.loginCode, e.ownerName, e.email, e.phone,
+      ts.lowStockThreshold, ts.receiptAutoCloseSeconds, ts.receiptFooter, ts.updatedAt
+    FROM establishments e
+    INNER JOIN tenant_settings ts ON ts.establishmentId = e.id
+    WHERE e.id = ?
+  `).get(establishmentId);
+};
 
 const buildTenantStatus = (establishmentId) => {
   const establishment = ensureEstablishmentExists(establishmentId);
@@ -1351,6 +1378,67 @@ app.get('/api/tenant/status', authenticateToken, isTenantUser, (req, res) => {
     const tenantStatus = buildTenantStatus(req.user.establishmentId);
     if (!tenantStatus) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
     res.json(tenantStatus);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/settings', authenticateToken, isTenantUser, (req, res) => {
+  try {
+    const settings = getTenantSettings(req.user.establishmentId);
+    if (!settings) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/settings', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  const validation = validateTenantSettings(req.body);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.errors[0], errors: validation.errors });
+  }
+
+  try {
+    const current = ensureEstablishmentExists(req.user.establishmentId);
+    if (!current) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+    const value = validation.value;
+    const now = new Date().toISOString();
+    const saveSettings = db.transaction(() => {
+      db.prepare('UPDATE establishments SET name = ?, ownerName = ?, email = ?, phone = ? WHERE id = ?')
+        .run(value.name, value.ownerName || null, value.email || null, value.phone || null, req.user.establishmentId);
+      db.prepare(`
+        INSERT INTO tenant_settings (
+          establishmentId, lowStockThreshold, receiptAutoCloseSeconds, receiptFooter, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(establishmentId) DO UPDATE SET
+          lowStockThreshold = excluded.lowStockThreshold,
+          receiptAutoCloseSeconds = excluded.receiptAutoCloseSeconds,
+          receiptFooter = excluded.receiptFooter,
+          updatedAt = excluded.updatedAt
+      `).run(
+        req.user.establishmentId,
+        value.lowStockThreshold,
+        value.receiptAutoCloseSeconds,
+        value.receiptFooter,
+        now,
+        now
+      );
+    });
+    saveSettings();
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'settings.updated',
+      entityType: 'tenant_settings',
+      entityId: req.user.establishmentId,
+      metadata: {
+        nameChanged: current.name !== value.name,
+        lowStockThreshold: value.lowStockThreshold,
+        receiptAutoCloseSeconds: value.receiptAutoCloseSeconds,
+      },
+    });
+    res.json(getTenantSettings(req.user.establishmentId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

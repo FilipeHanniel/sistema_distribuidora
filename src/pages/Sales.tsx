@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, type FormEvent } from 'react';
 import { Search, ShoppingCart, Plus, Minus, Trash2, CheckCircle, CreditCard, Banknote, QrCode, Scan, Tag, X } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
+import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import { apiRequest } from '../lib/api';
 import Modal from '../components/Modal';
 import type { CardTransaction, PixAccount, PixTransaction, Product, SaleItem } from '../types';
@@ -49,6 +50,7 @@ export default function Sales() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { products, addProduct } = useInventoryStore();
+  const lowStockThreshold = useSettingsStore(state => state.settings?.lowStockThreshold ?? DEFAULT_UI_SETTINGS.lowStockThreshold);
   const {
     addSale,
     createPixPayment,
@@ -466,7 +468,7 @@ export default function Sales() {
                     <div className="product-category-tag">{product.category}</div>
                     <h3>{product.name}</h3>
                     <div className="price">{formatCurrency(product.sellPrice)}</div>
-                    <div className={`stock ${product.stock <= 5 ? 'low' : ''}`}>
+                    <div className={`stock ${product.stock <= lowStockThreshold ? 'low' : ''}`}>
                       {product.stock <= 0 ? 'Sem estoque' : `${product.stock} em estoque`}
                     </div>
                     {product.stock > 0 && (

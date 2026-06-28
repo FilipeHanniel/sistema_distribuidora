@@ -60,7 +60,7 @@ Objetivo: transformar o sistema em plataforma comercial para multiplos estabelec
 - Criar planos e limites por plano. Concluido em 28/06/2026 com basic (gestor + 3), premium (gestor + 6) e enterprise ilimitado.
 - Implementar bloqueio por inadimplencia. Parcial em 26/06/2026: assinatura suspensa bloqueia operacao; atraso segue como periodo de tolerancia.
 - Melhorar dashboard do SuperAdmin com metricas de plataforma.
-- Criar configuracoes por estabelecimento.
+- Criar configuracoes por estabelecimento. Concluido em 28/06/2026 com identidade comercial, limite unificado de estoque e preferencias do comprovante.
 - Separar login por estabelecimento e permitir o mesmo nome de usuario em contas diferentes. Concluido em 28/06/2026.
 - Revisar isolamento de dados por tenant. Migracao de identidade validada em 28/06/2026; testes automatizados de rotas ainda pendentes.
 - Criar trilha de auditoria para acoes sensiveis. Ampliado em 28/06/2026 com criacao de usuarios e redefinicao de senha.
@@ -123,10 +123,9 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 Avancar a Fase 4 - Produto SaaS e multiempresa, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
 1. Implantar e testar no VPS a migracao de login por estabelecimento, reset de senha e limites basic/premium/enterprise.
-2. Criar tela de configuracoes por estabelecimento para dados comerciais e preferencias do sistema.
-3. Revisar isolamento de dados por tenant com testes automatizados.
-4. Criar fluxo de cobranca da plataforma com vencimento, tolerancia e suspensao automatica.
-5. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-6. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
+2. Revisar isolamento de dados por tenant com testes automatizados.
+3. Criar fluxo de cobranca da plataforma com vencimento, tolerancia e suspensao automatica.
+4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
+5. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

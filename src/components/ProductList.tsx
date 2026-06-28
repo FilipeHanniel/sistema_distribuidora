@@ -1,5 +1,6 @@
 import { Pencil, Trash2, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
+import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import type { Product } from '../types';
 
 interface ProductListProps {
@@ -10,6 +11,7 @@ interface ProductListProps {
 
 export default function ProductList({ searchTerm, onEdit, onAdjustStock }: ProductListProps) {
   const { products, deleteProduct } = useInventoryStore();
+  const lowStockThreshold = useSettingsStore(state => state.settings?.lowStockThreshold ?? DEFAULT_UI_SETTINGS.lowStockThreshold);
 
   const filteredProducts = products.filter(p => 
     p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -18,7 +20,7 @@ export default function ProductList({ searchTerm, onEdit, onAdjustStock }: Produ
 
   const getStockStatus = (stock: number) => {
     if (stock === 0) return { label: 'Esgotado', color: 'var(--secondary)' };
-    if (stock <= 10) return { label: 'Baixo', color: '#F59E0B' }; // Orange warning
+    if (stock <= lowStockThreshold) return { label: 'Baixo', color: '#F59E0B' }; // Orange warning
     return { label: 'Normal', color: '#10B981' }; // Green ok
   };
 

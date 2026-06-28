@@ -266,6 +266,15 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.sale-popup__business-name {
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+  padding-bottom: 0.55rem;
+  text-transform: uppercase;
+}
+
 .sale-popup__receipt-title strong {
   color: #ffffff;
   font-size: 0.9rem;
@@ -312,6 +321,14 @@
   justify-content: space-between;
   padding-top: 0.65rem;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.sale-popup__receipt-note {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  text-align: center;
+  padding-top: 0.65rem;
 }
 
 .sale-popup__fiscal {

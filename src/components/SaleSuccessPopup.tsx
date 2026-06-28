@@ -13,6 +13,9 @@ interface SaleSuccessPopupProps {
   createdAt?: string;
   fiscalDocument?: FiscalDocument | null;
   autoClose?: boolean;
+  autoCloseSeconds?: number;
+  establishmentName?: string;
+  receiptFooter?: string;
   showProcessing?: boolean;
   onClose: () => void;
 }
@@ -98,12 +101,16 @@ export default function SaleSuccessPopup({
   createdAt,
   fiscalDocument,
   autoClose = true,
+  autoCloseSeconds = 5,
+  establishmentName = '',
+  receiptFooter = '',
   showProcessing = true,
   onClose,
 }: SaleSuccessPopupProps) {
   const isMachine = showProcessing && (paymentMethod === 'card' || paymentMethod === 'pix');
   const [stage, setStage] = useState<FlowStage>(!autoClose ? 'done' : isMachine ? 'payment_processing' : 'payment_done');
-  const [countdown, setCountdown] = useState(5);
+  const closeSeconds = Math.max(1, autoCloseSeconds);
+  const [countdown, setCountdown] = useState(closeSeconds);
   const [paused, setPaused] = useState(false);
   const [currentFiscalDocument, setCurrentFiscalDocument] = useState<FiscalDocument | null>(fiscalDocument || null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -204,13 +211,13 @@ export default function SaleSuccessPopup({
       });
     }, 1000);
 
-    timerRef.current = setTimeout(() => onClose(), 5000);
+    timerRef.current = setTimeout(() => onClose(), closeSeconds * 1000);
 
     return () => {
       clearInterval(countdownRef.current!);
       clearTimeout(timerRef.current!);
     };
-  }, [isTerminalStage, paused, autoClose, onClose]);
+  }, [isTerminalStage, paused, autoClose, closeSeconds, onClose]);
 
   const handleClose = () => {
     clearTimeout(timerRef.current!);
@@ -220,7 +227,7 @@ export default function SaleSuccessPopup({
 
   const togglePaused = () => {
     if (paused) {
-      setCountdown(5);
+      setCountdown(closeSeconds);
       setPaused(false);
       return;
     }
@@ -275,6 +282,7 @@ export default function SaleSuccessPopup({
 
         {stage !== 'payment_processing' && (
           <div className="sale-popup__receipt">
+            {establishmentName && <div className="sale-popup__business-name">{establishmentName}</div>}
             <div className="sale-popup__receipt-title">
               <strong>{showVirtualNote ? 'Nota virtual' : 'Recibo da venda'}</strong>
               <span>
@@ -298,6 +306,7 @@ export default function SaleSuccessPopup({
               <span>Total</span>
               <strong>{formatCurrency(totalAmount)}</strong>
             </div>
+            {receiptFooter && <div className="sale-popup__receipt-note">{receiptFooter}</div>}
 
             {currentFiscalDocument && stage === 'fiscal_rejected' && (
               <div className="sale-popup__fiscal">
@@ -344,7 +353,7 @@ export default function SaleSuccessPopup({
 
       {isTerminalStage && autoClose && !paused && (
         <div className="sale-popup__progress">
-          <div className="sale-popup__progress-bar" style={{ animationDuration: '5s' }} />
+          <div className="sale-popup__progress-bar" style={{ animationDuration: `${closeSeconds}s` }} />
         </div>
       )}
     </div>

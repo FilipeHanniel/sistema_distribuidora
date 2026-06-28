@@ -63,6 +63,7 @@ Teste no navegador:
 - Login com o codigo correto do estabelecimento e rejeicao com codigo de outra conta
 - Criacao de funcionario e reset de senha pelo SuperAdmin
 - Limites de equipe dos planos Basico e Premium
+- Configuracoes do estabelecimento: nome comercial, estoque baixo e comportamento do comprovante
 - PDV
 - Venda simples
 - Pagamento Pix/cartao fake ou Mercado Pago teste
