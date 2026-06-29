@@ -155,6 +155,7 @@ export default function SuperAdmin() {
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
   const [isBillingModalOpen, setIsBillingModalOpen] = useState(false);
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
 
   const [selectedEst, setSelectedEst] = useState<ManagedEstablishment | null>(null);
   const [estUsers, setEstUsers] = useState<EstUser[]>([]);
@@ -177,6 +178,7 @@ export default function SuperAdmin() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    let loadedEstablishments: ManagedEstablishment[] = [];
     try {
       const [estRes, statsRes, insightsRes, plansRes, auditRes] = await Promise.all([
         fetch(`${API}/admin/establishments`, { headers: getHeaders() }),
@@ -187,6 +189,7 @@ export default function SuperAdmin() {
       ]);
       if (estRes.ok) {
         const establishmentData: ManagedEstablishment[] = await estRes.json();
+        loadedEstablishments = establishmentData;
         setEstablishments(establishmentData);
         setSelectedEst(current => current
           ? establishmentData.find(item => item.id === current.id) || current
@@ -202,6 +205,7 @@ export default function SuperAdmin() {
       }
     } catch (e) { console.error(e); }
     setLoading(false);
+    return loadedEstablishments;
   }, [periodDays]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -239,6 +243,11 @@ export default function SuperAdmin() {
     setIsSubModalOpen(true);
   };
 
+  const openOnboarding = (est: ManagedEstablishment) => {
+    setSelectedEst(est);
+    setIsOnboardingModalOpen(true);
+  };
+
   const openUsersModal = async (est: ManagedEstablishment) => {
     setSelectedEst(est);
     setUserFormMode(null);
@@ -271,8 +280,15 @@ export default function SuperAdmin() {
       method, headers: getHeaders(),
       body: JSON.stringify({ ...formData, subscriptionDueDate: dueDateISO }),
     });
-    if (res.ok) { setIsFormOpen(false); loadData(); }
-    else { const d = await res.json(); alert(d.error); }
+    if (res.ok) {
+      const data = await res.json();
+      setIsFormOpen(false);
+      const loaded = await loadData();
+      if (!editingEst) {
+        const created = loaded.find(item => item.id === data.id);
+        if (created) openOnboarding(created);
+      }
+    } else { const d = await res.json(); alert(d.error); }
   };
 
   const handleSubSave = async () => {
@@ -286,9 +302,13 @@ export default function SuperAdmin() {
   };
 
   const handleDelete = async (est: ManagedEstablishment) => {
-    if (!confirm(`Excluir "${est.name}"? Todos os usuários serão desativados.`)) return;
+    if (!confirm(`Excluir "${est.name}"? Esta ação só será permitida se a conta ainda não possuir dados operacionais.`)) return;
     const res = await fetch(`${API}/admin/establishments/${est.id}`, { method: 'DELETE', headers: getHeaders() });
     if (res.ok) loadData();
+    else {
+      const data = await res.json();
+      alert(data.error || 'Nao foi possivel excluir o estabelecimento.');
+    }
   };
 
   const handleRegisterPayment = async (e: FormEvent) => {
@@ -483,6 +503,7 @@ export default function SuperAdmin() {
     'product.created': 'Produto criado',
     'product.updated': 'Produto atualizado',
     'product.deleted': 'Produto removido',
+    'product.stock_adjusted': 'Estoque ajustado',
     'sale.created': 'Venda registrada',
     'user.created': 'Usuario criado',
     'user.created_by_superadmin': 'Usuario criado pelo SuperAdmin',
@@ -493,6 +514,16 @@ export default function SuperAdmin() {
     'user.activated': 'Usuario ativado',
     'user.deactivated': 'Usuario desativado',
     'user.deleted': 'Usuario removido',
+    'fiscal.settings_updated': 'Configuração fiscal atualizada',
+    'fiscal.certificate_uploaded': 'Certificado fiscal enviado',
+    'fiscal.certificate_removed': 'Certificado fiscal removido',
+    'fiscal.document_prepared': 'Documento fiscal preparado',
+    'fiscal.document_issued': 'Documento fiscal emitido',
+    'fiscal.document_printed': 'Documento fiscal impresso',
+    'payment_account.point_configured': 'Loja e caixa Point configurados',
+    'payment_account.terminal_activated': 'Terminal Point ativado',
+    'payment_transaction.reconciled': 'Pagamento conciliado',
+    'payment_transaction.cancel_requested': 'Cancelamento de pagamento solicitado',
   };
 
   const summarizeAuditMetadata = (metadata?: Record<string, unknown>) => {
@@ -887,6 +918,18 @@ export default function SuperAdmin() {
                   {est.email && <div className="est-contact"><Mail size={12} />{est.email}</div>}
                   {est.phone && <div className="est-contact"><Phone size={12} />{est.phone}</div>}
 
+                  {est.onboarding && (
+                    <button className="onboarding-status" type="button" onClick={() => openOnboarding(est)}>
+                      <span className={`onboarding-state onboarding-state--${est.onboarding.status}`}>
+                        {est.onboarding.operational ? 'Operacional' : est.onboarding.ready ? 'Acesso pronto' : 'Implantação pendente'}
+                      </span>
+                      <span className="onboarding-progress-track" aria-hidden="true">
+                        <span style={{ width: `${est.onboarding.progress}%` }} />
+                      </span>
+                      <small>{est.onboarding.completedSteps}/{est.onboarding.totalSteps} etapas</small>
+                    </button>
+                  )}
+
                   <div className="est-meta">
                     <div className="est-meta-item">
                       <span className="est-meta-label">Usuários</span>
@@ -921,6 +964,7 @@ export default function SuperAdmin() {
                   </div>
 
                   <div className="est-actions">
+                    <button className="btn btn-secondary btn-sm" onClick={() => openOnboarding(est)}><ClipboardList size={13} /> Implantação</button>
                     <button className="btn btn-secondary btn-sm" onClick={() => openUsersModal(est)}><Eye size={13} /> Usuários</button>
                     <button className="btn btn-billing btn-sm" onClick={() => openBilling(est)}><DollarSign size={13} /> Cobranças</button>
                     <button className={`btn btn-sm ${days !== null && days < 0 ? 'btn-danger' : 'btn-secondary'}`} onClick={() => openSubModal(est)}>
@@ -1056,6 +1100,58 @@ export default function SuperAdmin() {
           </div>
         </div>
       )}
+
+      <Modal isOpen={isOnboardingModalOpen} onClose={() => setIsOnboardingModalOpen(false)}
+        title={`Implantação — ${selectedEst?.name || ''}`}>
+        {selectedEst?.onboarding && (
+          <div className="onboarding-panel">
+            <div className="onboarding-access">
+              <div>
+                <span>Código do estabelecimento</span>
+                <strong>{selectedEst.loginCode}</strong>
+              </div>
+              <div>
+                <span>Login inicial do gestor</span>
+                <strong>{selectedEst.onboarding.managerUsername || 'Pendente'}</strong>
+              </div>
+            </div>
+
+            <div className="onboarding-summary">
+              <div>
+                <strong>{selectedEst.onboarding.progress}%</strong>
+                <span>{selectedEst.onboarding.ready ? 'Acesso liberado' : 'Requer atenção'}</span>
+              </div>
+              <span className="onboarding-progress-track" aria-hidden="true">
+                <span style={{ width: `${selectedEst.onboarding.progress}%` }} />
+              </span>
+            </div>
+
+            <div className="onboarding-steps">
+              {selectedEst.onboarding.steps.map(step => (
+                <div className={`onboarding-step ${step.complete ? 'complete' : ''}`} key={step.key}>
+                  {step.complete ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+                  <span>{step.label}</span>
+                  <small>{step.required ? 'Obrigatório' : 'Próximo passo'}</small>
+                </div>
+              ))}
+            </div>
+
+            <div className="form-actions">
+              <button className="btn btn-secondary" type="button" onClick={() => {
+                const establishment = selectedEst;
+                setIsOnboardingModalOpen(false);
+                openEdit(establishment);
+              }}><Edit2 size={14} /> Editar cadastro</button>
+              <button className="btn btn-secondary" type="button" onClick={() => {
+                const establishment = selectedEst;
+                setIsOnboardingModalOpen(false);
+                openUsersModal(establishment);
+              }}><Users size={14} /> Usuários</button>
+              <button className="btn btn-primary" type="button" onClick={() => setIsOnboardingModalOpen(false)}>Concluir</button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ===== MODAL: CRIAR / EDITAR ESTABELECIMENTO ===== */}
       <Modal isOpen={isFormOpen} onClose={() => setIsFormOpen(false)}

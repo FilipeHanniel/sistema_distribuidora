@@ -78,6 +78,7 @@ const {
   evaluateSubscription,
   normalizeGraceDays,
 } = require('./subscriptionPolicy');
+const { buildOnboardingStatus } = require('./onboardingPolicy');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -289,6 +290,37 @@ const getTenantUsage = (establishmentId) => ({
   paymentAccounts: db.prepare('SELECT COUNT(*) as c FROM pix_accounts WHERE establishmentId = ? AND active = 1')
     .get(establishmentId).c,
 });
+
+const getEstablishmentOnboarding = (establishment) => {
+  const manager = db.prepare(`
+    SELECT username
+    FROM users
+    WHERE establishmentId = ? AND role = 'gestor' AND active = 1 AND isDeleted = 0
+    ORDER BY createdAt ASC
+    LIMIT 1
+  `).get(establishment.id);
+  const activeManagers = manager ? 1 : 0;
+  const settingsConfigured = Boolean(
+    db.prepare('SELECT 1 FROM tenant_settings WHERE establishmentId = ?').get(establishment.id)
+  );
+  const productCount = db.prepare('SELECT COUNT(*) as count FROM products WHERE establishmentId = ?')
+    .get(establishment.id).count;
+  const paymentAccountCount = db.prepare('SELECT COUNT(*) as count FROM pix_accounts WHERE establishmentId = ? AND active = 1')
+    .get(establishment.id).count;
+  const fiscalModeDefined = Boolean(
+    db.prepare('SELECT 1 FROM fiscal_settings WHERE establishmentId = ?').get(establishment.id)
+  );
+
+  return buildOnboardingStatus({
+    establishment,
+    activeManagers,
+    managerUsername: manager?.username || null,
+    settingsConfigured,
+    productCount,
+    paymentAccountCount,
+    fiscalModeDefined,
+  });
+};
 
 const getTenantSettings = (establishmentId) => {
   const now = new Date().toISOString();
@@ -1910,6 +1942,14 @@ app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, requireOpe
     const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
     db.prepare(`UPDATE products SET stock = stock + ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`).run(quantityStep, now, id, req.user.establishmentId);
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'product.stock_adjusted',
+      entityType: 'product',
+      entityId: id,
+      metadata: { quantityStep: Number(quantityStep) },
+    });
     res.json({ message: 'Estoque ajustado!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2034,9 +2074,23 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
     );
 
     const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    const readiness = getFiscalReadiness(settings);
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'fiscal.settings_updated',
+      entityType: 'fiscal_settings',
+      entityId: estId,
+      metadata: {
+        enabled: Boolean(settings.enabled),
+        providerMode: settings.providerMode,
+        environment: settings.environment,
+        ready: readiness.ready,
+      },
+    });
     res.json({
       settings: sanitizeFiscalSettings(settings),
-      readiness: getFiscalReadiness(settings),
+      readiness,
       message: 'Configuracao fiscal salva.',
     });
   } catch (err) {
@@ -2089,6 +2143,18 @@ app.post('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
     }
 
     const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'fiscal.certificate_uploaded',
+      entityType: 'fiscal_certificate',
+      entityId: estId,
+      metadata: {
+        fileName: storedCertificate.originalFileName,
+        fingerprint: storedCertificate.fileFingerprint,
+        validTo: storedCertificate.validTo,
+      },
+    });
     res.status(201).json({
       settings: sanitizeFiscalSettings(settings),
       readiness: getFiscalReadiness(settings),
@@ -2123,6 +2189,17 @@ app.delete('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) =>
     }
 
     const settings = db.prepare('SELECT * FROM fiscal_settings WHERE establishmentId = ?').get(estId);
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'fiscal.certificate_removed',
+      entityType: 'fiscal_certificate',
+      entityId: estId,
+      metadata: {
+        fileName: current.certificateFileName || null,
+        fingerprint: current.certificateFingerprint || null,
+      },
+    });
     res.json({
       settings: sanitizeFiscalSettings(settings),
       readiness: getFiscalReadiness(settings),
@@ -2176,6 +2253,14 @@ app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove
     const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
     if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
     const document = upsertFiscalDocumentForSale(req.params.saleId, req.user.establishmentId, { force: true });
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'fiscal.document_prepared',
+      entityType: 'fiscal_document',
+      entityId: document.id,
+      metadata: { saleId: req.params.saleId, status: document.status },
+    });
     res.status(201).json(document);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2186,6 +2271,14 @@ app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, 
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
     const document = await issueFiscalDocument(req.params.id, req.user.establishmentId);
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'fiscal.document_issued',
+      entityType: 'fiscal_document',
+      entityId: document.id,
+      metadata: { status: document.status, accessKey: document.accessKey || null },
+    });
     res.json(document);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2202,6 +2295,13 @@ app.patch('/api/fiscal/documents/:id/printed', authenticateToken, isGestorOrAbov
       WHERE id = ? AND establishmentId = ? AND status = 'authorized'
     `).run(now, now, req.params.id, req.user.establishmentId);
     if (!result.changes) return res.status(400).json({ error: 'Documento nao autorizado ou nao encontrado.' });
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'fiscal.document_printed',
+      entityType: 'fiscal_document',
+      entityId: req.params.id,
+    });
     res.json({ message: 'Documento marcado como impresso.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2443,6 +2543,18 @@ app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, r
       credentials = decodeCredentials(account.credentials);
     }
 
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'payment_account.point_configured',
+      entityType: 'pix_account',
+      entityId: account.id,
+      metadata: {
+        storeId: credentials.storeId || null,
+        posId: credentials.posId || null,
+      },
+    });
+
     res.status(201).json({
       account: sanitizePixAccount(account),
       terminals: [],
@@ -2505,6 +2617,14 @@ app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authentic
       accessToken: credentials.accessToken,
       storeId: credentials.storeId,
       posId: credentials.posId,
+    });
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'payment_account.terminal_activated',
+      entityType: 'pix_account',
+      entityId: account.id,
+      metadata: { terminalId: terminal.id },
     });
     res.json({
       account: sanitizePixAccount(account),
@@ -2815,6 +2935,14 @@ app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor
       LEFT JOIN sales s ON s.id = pt.saleId AND s.establishmentId = pt.establishmentId
       WHERE pt.id = ? AND pt.establishmentId = ?
     `).get(transaction.id, estId);
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_transaction.reconciled',
+      entityType: 'payment_transaction',
+      entityId: transaction.id,
+      metadata: { status: transaction.status, saleId: transaction.saleId || null },
+    });
     res.json(sanitizePaymentTransactionForPanel(detailed));
   } catch (err) {
     db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
@@ -3045,6 +3173,14 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, requir
       latest = await finalizePaidTransaction({ transactionId: latest.id, userId: req.user.id });
     }
     const responseStatus = latest.status === 'processing' ? 'pending' : latest.status;
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_transaction.cancel_requested',
+      entityType: 'payment_transaction',
+      entityId: latest.id,
+      metadata: { paymentMethod: 'pix', status: responseStatus },
+    });
 
     res.json({
       id: latest.id,
@@ -3110,6 +3246,14 @@ app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, requi
     if (latest.status === 'paid' && !latest.saleId) {
       latest = await finalizePaidTransaction({ transactionId: latest.id, userId: req.user.id });
     }
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'payment_transaction.cancel_requested',
+      entityType: 'payment_transaction',
+      entityId: latest.id,
+      metadata: { paymentMethod: 'card', status: latest.status },
+    });
     res.json(buildCardTransactionResponse(latest, estId));
   } catch (err) {
     console.error('[Card Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
@@ -3460,6 +3604,7 @@ app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res)
         plan: normalizePlan(est.plan),
         planDefinition: getPlanDefinition(est.plan),
         billing: getSubscriptionBilling(est),
+        onboarding: getEstablishmentOnboarding(est),
         usage: getTenantUsage(est.id),
         userCount,
         salesCount,
@@ -3508,7 +3653,20 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
         .run(gestorId, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), gestorName.trim(), estId, now);
     });
     createEstAndGestor();
+    getTenantSettings(estId);
+    ensureFiscalSettings(estId);
     reconcileSubscriptions();
+    createNotification({
+      establishmentId: estId,
+      audience: 'gestor',
+      type: 'onboarding_started',
+      title: 'Conta pronta para configuracao',
+      message: 'Seu acesso foi criado. Cadastre os primeiros produtos e configure os recebimentos conforme a operacao do estabelecimento.',
+      referenceType: 'establishment',
+      referenceId: `${estId}:onboarding`,
+    });
+    const createdEstablishment = ensureEstablishmentExists(estId);
+    const onboarding = getEstablishmentOnboarding(createdEstablishment);
     logAudit({
       req,
       establishmentId: estId,
@@ -3517,7 +3675,13 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
       entityId: estId,
       metadata: { name, loginCode: normalizedLoginCode, plan: normalizedPlan, graceDays, gestorUsername: usernameResult.username },
     });
-    res.status(201).json({ id: estId, message: 'Estabelecimento criado com sucesso!' });
+    res.status(201).json({
+      id: estId,
+      loginCode: normalizedLoginCode,
+      gestorUsername: usernameResult.username,
+      onboarding,
+      message: 'Estabelecimento criado com sucesso!',
+    });
   } catch (err) {
     if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
       return res.status(409).json({ error: 'Codigo do estabelecimento ou login do gestor ja esta em uso.' });
@@ -3594,16 +3758,45 @@ app.patch('/api/admin/establishments/:id/subscription', authenticateToken, isSup
 app.delete('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
   try {
-    const est = db.prepare('SELECT name FROM establishments WHERE id = ?').get(id);
-    db.prepare('UPDATE users SET isDeleted = 1 WHERE establishmentId = ?').run(id);
-    db.prepare('DELETE FROM establishments WHERE id = ?').run(id);
+    const est = db.prepare('SELECT * FROM establishments WHERE id = ?').get(id);
+    if (!est) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
+    const dependencies = {
+      products: db.prepare('SELECT COUNT(*) as count FROM products WHERE establishmentId = ?').get(id).count,
+      sales: db.prepare('SELECT COUNT(*) as count FROM sales WHERE establishmentId = ?').get(id).count,
+      paymentAccounts: db.prepare('SELECT COUNT(*) as count FROM pix_accounts WHERE establishmentId = ?').get(id).count,
+      paymentTransactions: db.prepare('SELECT COUNT(*) as count FROM payment_transactions WHERE establishmentId = ?').get(id).count,
+      payments: db.prepare('SELECT COUNT(*) as count FROM payments WHERE establishmentId = ?').get(id).count,
+    };
+    if (Object.values(dependencies).some(count => count > 0)) {
+      return res.status(409).json({
+        error: 'Este estabelecimento possui dados operacionais. Suspenda a assinatura para preservar o historico.',
+        dependencies,
+      });
+    }
+
+    const fiscal = db.prepare('SELECT certificatePath FROM fiscal_settings WHERE establishmentId = ?').get(id);
+    const removeEstablishment = db.transaction(() => {
+      db.prepare('DELETE FROM notifications WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM ai_reports WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM ai_suggestions WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM tenant_settings WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM fiscal_settings WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM users WHERE establishmentId = ?').run(id);
+      db.prepare('DELETE FROM establishments WHERE id = ?').run(id);
+    });
+    removeEstablishment();
+    if (fiscal?.certificatePath) {
+      try { removeManagedCertificate(fiscal.certificatePath); } catch (error) {
+        console.warn('[Establishment Delete] Certificado nao removido:', error.message);
+      }
+    }
     logAudit({
       req,
       establishmentId: id,
       action: 'establishment.deleted',
       entityType: 'establishment',
       entityId: id,
-      metadata: { name: est?.name || null },
+      metadata: { name: est.name },
     });
     res.json({ message: 'Estabelecimento removido!' });
   } catch (err) {

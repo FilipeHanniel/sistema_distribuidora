@@ -248,6 +248,10 @@ test('restringe rotas administrativas e permite acesso controlado ao SuperAdmin'
   assert.equal(denied.status, 403);
   assert.equal(allowed.status, 200);
   assert.deepEqual(allowed.payload.map(item => item.id).sort(), ['est-a', 'est-b']);
+  const establishmentA = allowed.payload.find(item => item.id === 'est-a');
+  assert.equal(establishmentA.onboarding.ready, true);
+  assert.equal(establishmentA.onboarding.operational, true);
+  assert.equal(establishmentA.onboarding.managerUsername, 'gestor');
 
   const productsB = await request('/api/products', { token: tokenB });
   assert.ok(productsB.payload.every(item => item.establishmentId === 'est-b'));
@@ -299,4 +303,56 @@ test('automatiza atraso, suspensao, notificacoes e reativacao por pagamento', as
   assert.equal(payment.payload.subscriptionStatus, 'active');
   assert.equal(db.prepare("SELECT subscriptionStatus FROM establishments WHERE id = 'est-a'").get().subscriptionStatus, 'active');
   assert.equal(db.prepare("SELECT COUNT(*) c FROM notifications WHERE establishmentId = 'est-a' AND type = 'subscription_payment_registered'").get().c, 1);
+});
+
+test('audita ajuste direto de estoque', async () => {
+  const response = await request('/api/products/product-a/stock', {
+    token: tokenA,
+    method: 'PATCH',
+    body: { quantityStep: 2 },
+  });
+  assert.equal(response.status, 200);
+  const audit = db.prepare(`
+    SELECT action, metadata FROM audit_logs
+    WHERE establishmentId = 'est-a' AND entityId = 'product-a' AND action = 'product.stock_adjusted'
+    ORDER BY createdAt DESC LIMIT 1
+  `).get();
+  assert.equal(audit.action, 'product.stock_adjusted');
+  assert.equal(JSON.parse(audit.metadata).quantityStep, 2);
+});
+
+test('cria estrutura inicial e permite excluir apenas conta ainda vazia', async () => {
+  const created = await request('/api/admin/establishments', {
+    token: superToken,
+    method: 'POST',
+    body: {
+      name: 'Loja Nova',
+      loginCode: 'loja-nova',
+      ownerName: 'Gestora Nova',
+      email: 'gestora.nova@example.com',
+      plan: 'basic',
+      monthlyAmount: 99,
+      gestorName: 'Gestora Nova',
+      gestorUsername: 'gestora',
+      gestorPassword: 'senha-nova-123',
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.payload.onboarding.ready, true);
+  assert.equal(created.payload.onboarding.operational, false);
+  assert.ok(db.prepare('SELECT 1 FROM tenant_settings WHERE establishmentId = ?').get(created.payload.id));
+  assert.ok(db.prepare('SELECT 1 FROM fiscal_settings WHERE establishmentId = ?').get(created.payload.id));
+
+  const deleted = await request(`/api/admin/establishments/${created.payload.id}`, {
+    token: superToken,
+    method: 'DELETE',
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal(db.prepare('SELECT 1 FROM establishments WHERE id = ?').get(created.payload.id), undefined);
+
+  const protectedDeletion = await request('/api/admin/establishments/est-a', {
+    token: superToken,
+    method: 'DELETE',
+  });
+  assert.equal(protectedDeletion.status, 409);
 });

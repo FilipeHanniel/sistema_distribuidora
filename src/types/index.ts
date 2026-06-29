@@ -63,6 +63,7 @@ export interface Establishment {
   subscriptionStatusReason?: 'past_due' | 'manual' | null;
   subscriptionStatusUpdatedAt?: string;
   billing?: SubscriptionBilling;
+  onboarding?: OnboardingStatus;
   notes?: string;
   userCount?: number;
   salesCount?: number;
@@ -70,6 +71,28 @@ export interface Establishment {
   planDefinition?: PlanDefinition;
   usage?: TenantUsage;
   createdAt: string;
+}
+
+export interface OnboardingStep {
+  key: string;
+  label: string;
+  complete: boolean;
+  required: boolean;
+  action: 'edit_establishment' | 'manage_users' | 'edit_subscription' | 'manager_setup' | string;
+}
+
+export interface OnboardingStatus {
+  status: 'needs_attention' | 'ready' | 'operational';
+  ready: boolean;
+  operational: boolean;
+  requiredComplete: number;
+  requiredTotal: number;
+  completedSteps: number;
+  totalSteps: number;
+  progress: number;
+  managerUsername?: string | null;
+  nextStep?: OnboardingStep | null;
+  steps: OnboardingStep[];
 }
 
 export interface SubscriptionBilling {

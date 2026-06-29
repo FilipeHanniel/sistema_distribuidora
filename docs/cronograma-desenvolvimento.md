@@ -52,22 +52,22 @@ Objetivo: preparar o caminho profissional para emissao fiscal real.
 
 ## Fase 4 - Produto SaaS e multiempresa
 
-Status: em implementacao
+Status: concluida
 
 Objetivo: transformar o sistema em plataforma comercial para multiplos estabelecimentos.
 
-- Refinar onboarding do SuperAdmin. Parcial em 28/06/2026 com codigo de acesso por estabelecimento, criacao de funcionarios e reset de senha.
+- Refinar onboarding do SuperAdmin. Concluido em 28/06/2026 com codigo de acesso, gestor inicial, configuracoes automaticas, diagnostico de implantacao e exclusao protegida de contas com historico.
 - Criar planos e limites por plano. Concluido em 28/06/2026 com basic (gestor + 3), premium (gestor + 6) e enterprise ilimitado.
 - Implementar bloqueio por inadimplencia. Concluido em 28/06/2026 com vencimento, tolerancia configuravel, reconciliacao automatica, notificacoes, suspensao, bloqueio operacional e reativacao por pagamento.
-- Melhorar dashboard do SuperAdmin com metricas de plataforma.
+- Melhorar dashboard do SuperAdmin com metricas de plataforma. Concluido em 28/06/2026 com MRR, ARPA, crescimento, risco, comparacao entre negocios e ranking de desempenho.
 - Criar configuracoes por estabelecimento. Concluido em 28/06/2026 com identidade comercial, limite unificado de estoque e preferencias do comprovante.
 - Separar login por estabelecimento e permitir o mesmo nome de usuario em contas diferentes. Concluido em 28/06/2026.
 - Revisar isolamento de dados por tenant. Concluido em 28/06/2026 com banco temporario e testes de integracao para login, produtos, usuarios, vendas, recebimentos, configuracoes e SuperAdmin.
-- Criar trilha de auditoria para acoes sensiveis. Ampliado em 28/06/2026 com criacao de usuarios e redefinicao de senha.
+- Criar trilha de auditoria para acoes sensiveis. Concluido em 28/06/2026 cobrindo usuarios, produtos, estoque, vendas, recebimentos, Point, fiscal, certificados, assinaturas e pagamentos da plataforma.
 
 ## Fase 5 - Operacao do estabelecimento
 
-Status: base funcional
+Status: proxima fase
 
 Objetivo: melhorar o dia a dia do gestor e operador.
 
@@ -120,11 +120,12 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 ## Proximo passo recomendado
 
-Avancar a Fase 4 - Produto SaaS e multiempresa, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
+Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Implantar e testar no VPS a migracao de login por estabelecimento, reset de senha e limites basic/premium/enterprise.
-2. Fechar o onboarding do SuperAdmin e ampliar a auditoria das acoes sensiveis restantes.
-3. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-4. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
+1. Criar fornecedores e o fluxo de compras/entrada de estoque.
+2. Refinar o PDV e o cadastro rapido de produtos para leitor de codigo de barras.
+3. Criar relatorios de estoque, margem e ruptura.
+4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
+5. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
