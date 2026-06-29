@@ -59,6 +59,10 @@ export interface Establishment {
   plan: 'basic' | 'premium' | 'enterprise';
   subscriptionStatus: 'active' | 'overdue' | 'suspended';
   subscriptionDueDate?: string;
+  subscriptionGraceDays?: number;
+  subscriptionStatusReason?: 'past_due' | 'manual' | null;
+  subscriptionStatusUpdatedAt?: string;
+  billing?: SubscriptionBilling;
   notes?: string;
   userCount?: number;
   salesCount?: number;
@@ -66,6 +70,29 @@ export interface Establishment {
   planDefinition?: PlanDefinition;
   usage?: TenantUsage;
   createdAt: string;
+}
+
+export interface SubscriptionBilling {
+  dueDate?: string | null;
+  status: Establishment['subscriptionStatus'];
+  reason?: 'past_due' | 'manual' | string | null;
+  manualSuspension: boolean;
+  graceDays: number;
+  daysUntilDue: number | null;
+  daysPastDue: number | null;
+  suspensionDate?: string | null;
+}
+
+export interface TenantStatus {
+  establishment: Pick<Establishment, 'id' | 'name' | 'plan' | 'subscriptionStatus' | 'subscriptionDueDate' | 'subscriptionGraceDays' | 'subscriptionStatusReason'>;
+  plan: PlanDefinition;
+  usage: TenantUsage;
+  subscription: {
+    status: Establishment['subscriptionStatus'];
+    canOperate: boolean;
+    message?: string | null;
+  };
+  billing: SubscriptionBilling;
 }
 
 export interface PlanLimits {

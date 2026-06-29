@@ -124,6 +124,7 @@ interface EstablishmentForm {
   monthlyAmount: string;
   subscriptionStatus: SubscriptionStatus;
   subscriptionDueDate: string;
+  subscriptionGraceDays: string;
   notes: string;
   gestorUsername: string;
   gestorPassword: string;
@@ -133,6 +134,7 @@ interface EstablishmentForm {
 const emptyForm: EstablishmentForm = {
   name: '', loginCode: '', ownerName: '', email: '', phone: '', plan: 'basic',
   monthlyAmount: '', subscriptionStatus: 'active', subscriptionDueDate: '', notes: '',
+  subscriptionGraceDays: '7',
   gestorUsername: '', gestorPassword: '', gestorName: '',
 };
 
@@ -161,9 +163,10 @@ export default function SuperAdmin() {
 
   // Forms
   const [formData, setFormData] = useState({ ...emptyForm });
-  const [subData, setSubData] = useState<{ subscriptionStatus: SubscriptionStatus; subscriptionDueDate: string }>({
+  const [subData, setSubData] = useState<{ subscriptionStatus: SubscriptionStatus; subscriptionDueDate: string; subscriptionGraceDays: string }>({
     subscriptionStatus: 'active',
     subscriptionDueDate: '',
+    subscriptionGraceDays: '7',
   });
   const [payForm, setPayForm] = useState({ amount: '', notes: '' });
   const [payFormOpen, setPayFormOpen] = useState(false);
@@ -182,7 +185,13 @@ export default function SuperAdmin() {
         fetch(`${API}/admin/plans`, { headers: getHeaders() }),
         fetch(`${API}/admin/audit-logs?limit=80`, { headers: getHeaders() }),
       ]);
-      if (estRes.ok) setEstablishments(await estRes.json());
+      if (estRes.ok) {
+        const establishmentData: ManagedEstablishment[] = await estRes.json();
+        setEstablishments(establishmentData);
+        setSelectedEst(current => current
+          ? establishmentData.find(item => item.id === current.id) || current
+          : null);
+      }
       if (statsRes.ok) setStats(await statsRes.json());
       if (plansRes.ok) setPlans(await plansRes.json());
       if (auditRes.ok) setAuditLogs(await auditRes.json());
@@ -214,6 +223,7 @@ export default function SuperAdmin() {
       monthlyAmount: est.monthlyAmount ? String(est.monthlyAmount) : '',
       subscriptionStatus: est.subscriptionStatus,
       subscriptionDueDate: est.subscriptionDueDate ? est.subscriptionDueDate.split('T')[0] : '',
+      subscriptionGraceDays: String(est.subscriptionGraceDays ?? 7),
       notes: est.notes || '', gestorUsername: '', gestorPassword: '', gestorName: '',
     });
     setIsFormOpen(true);
@@ -224,6 +234,7 @@ export default function SuperAdmin() {
     setSubData({
       subscriptionStatus: est.subscriptionStatus,
       subscriptionDueDate: est.subscriptionDueDate ? est.subscriptionDueDate.split('T')[0] : '',
+      subscriptionGraceDays: String(est.subscriptionGraceDays ?? 7),
     });
     setIsSubModalOpen(true);
   };
@@ -344,6 +355,17 @@ export default function SuperAdmin() {
     );
   };
 
+  const handleReconcileSubscriptions = async () => {
+    const res = await fetch(`${API}/admin/subscriptions/reconcile`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || 'Nao foi possivel atualizar as assinaturas.');
+    await loadData();
+    alert(`${data.message} ${data.summary.changed} status alterado(s).`);
+  };
+
   const reloadEstablishmentUsers = async (establishmentId: string) => {
     const res = await fetch(`${API}/admin/establishments/${establishmentId}/users`, { headers: getHeaders() });
     if (res.ok) setEstUsers(await res.json());
@@ -451,6 +473,7 @@ export default function SuperAdmin() {
     'establishment.updated': 'Estabelecimento atualizado',
     'establishment.deleted': 'Estabelecimento removido',
     'subscription.updated': 'Assinatura atualizada',
+    'subscription.auto_status_updated': 'Status da assinatura atualizado automaticamente',
     'platform_payment.registered': 'Pagamento registrado',
     'platform_payment.deleted': 'Pagamento removido',
     'payment_account.created': 'Conta criada',
@@ -916,6 +939,15 @@ export default function SuperAdmin() {
       {/* ===== TAB: COBRANÇAS (visão geral) ===== */}
       {tab === 'billing' && (
         <div className="billing-overview">
+          <div className="platform-toolbar">
+            <div>
+              <h2>Cobrancas da plataforma</h2>
+              <p>Vencimentos, tolerancia, suspensoes e pagamentos registrados.</p>
+            </div>
+            <button className="btn btn-secondary" onClick={handleReconcileSubscriptions}>
+              <RefreshCw size={15} /> Atualizar assinaturas
+            </button>
+          </div>
           {loading ? (
             <div className="sa-empty"><RefreshCw size={32} style={{ opacity: 0.3 }} /></div>
           ) : (
@@ -1105,6 +1137,14 @@ export default function SuperAdmin() {
             </small>
           </div>
           <div className="form-group">
+            <label>Dias de tolerancia</label>
+            <input className="form-control" type="number" min="0" max="90" value={formData.subscriptionGraceDays}
+              onChange={e => setFormData(p => ({ ...p, subscriptionGraceDays: e.target.value }))} />
+            <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+              A suspensao automatica ocorre no dia seguinte ao fim deste periodo.
+            </small>
+          </div>
+          <div className="form-group">
             <label>Observações</label>
             <textarea className="form-control" rows={2} value={formData.notes}
               onChange={e => setFormData(p => ({ ...p, notes: e.target.value }))}
@@ -1163,6 +1203,11 @@ export default function SuperAdmin() {
           <input className="form-control" type="date" value={subData.subscriptionDueDate}
             onChange={e => setSubData(p => ({ ...p, subscriptionDueDate: e.target.value }))} />
         </div>
+        <div className="form-group">
+          <label>Dias de tolerância</label>
+          <input className="form-control" type="number" min="0" max="90" value={subData.subscriptionGraceDays}
+            onChange={e => setSubData(p => ({ ...p, subscriptionGraceDays: e.target.value }))} />
+        </div>
         <div className="form-actions">
           <button className="btn btn-secondary" onClick={() => setIsSubModalOpen(false)}>Cancelar</button>
           <button className="btn btn-primary" onClick={handleSubSave}>Salvar</button>
@@ -1181,7 +1226,6 @@ export default function SuperAdmin() {
             <UserPlus size={14} /> Adicionar funcionario
           </button>
         </div>
-
         {userFormMode && (
           <form className="est-user-editor" onSubmit={handleUserFormSubmit}>
             <div className="form-section-title">
@@ -1273,6 +1317,16 @@ export default function SuperAdmin() {
                 {formatDate(selectedEst.subscriptionDueDate)}
               </span>
             </div>
+            <div className="billing-summary-item">
+              <span className="bs-label">Tolerância</span>
+              <span className="bs-value">{selectedEst.billing?.graceDays ?? selectedEst.subscriptionGraceDays ?? 7} dias</span>
+            </div>
+            {selectedEst.billing?.suspensionDate && selectedEst.billing.status !== 'active' && (
+              <div className="billing-summary-item">
+                <span className="bs-label">Suspensão prevista</span>
+                <span className="bs-value">{formatDate(selectedEst.billing.suspensionDate)}</span>
+              </div>
+            )}
           </div>
         )}
 

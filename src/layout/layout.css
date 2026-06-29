@@ -540,6 +540,58 @@
 }
 
 /* ── Content Scroll ── */
+.subscription-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid;
+  flex-shrink: 0;
+}
+
+.subscription-banner > svg {
+  flex-shrink: 0;
+}
+
+.subscription-banner div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.subscription-banner strong {
+  font-size: 0.85rem;
+}
+
+.subscription-banner span {
+  font-size: 0.8rem;
+}
+
+.subscription-banner--overdue {
+  color: #854d0e;
+  background: #fef9c3;
+  border-color: #fde047;
+}
+
+.subscription-banner--suspended {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+[data-theme='dark'] .subscription-banner--overdue {
+  color: #fde68a;
+  background: #422006;
+  border-color: #854d0e;
+}
+
+[data-theme='dark'] .subscription-banner--suspended {
+  color: #fecaca;
+  background: #450a0a;
+  border-color: #991b1b;
+}
+
 .content-scroll {
   flex: 1;
   overflow-y: auto;
@@ -548,6 +600,12 @@
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
+  .subscription-banner div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
   .sidebar {
     position: fixed;
     left: 0;

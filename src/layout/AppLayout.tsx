@@ -3,7 +3,8 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import {
   LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
-  Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards, SlidersHorizontal
+  Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards, SlidersHorizontal,
+  AlertTriangle, ShieldX
 } from 'lucide-react';
 import './layout.css';
 
@@ -29,7 +30,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useUserStore } from '../store/useUserStore';
 import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import { apiRequest } from '../lib/api';
-import type { AppNotification } from '../types';
+import type { AppNotification, TenantStatus } from '../types';
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Painel de Gestão',
@@ -63,6 +64,7 @@ export default function AppLayout() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [tenantStatus, setTenantStatus] = useState<TenantStatus | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -78,6 +80,7 @@ export default function AppLayout() {
     clearUsers();
     clearSettings();
     setNotifications([]);
+    setTenantStatus(null);
 
     if (!isAuthenticated()) return;
 
@@ -138,6 +141,18 @@ export default function AppLayout() {
     const timer = window.setInterval(loadNotifications, 60000);
     return () => window.clearInterval(timer);
   }, [gestor, isAuthenticated]);
+
+  useEffect(() => {
+    if (superAdmin || !isAuthenticated()) return;
+    const loadTenantStatus = () => {
+      apiRequest<TenantStatus>('/tenant/status')
+        .then(setTenantStatus)
+        .catch(() => setTenantStatus(null));
+    };
+    loadTenantStatus();
+    const timer = window.setInterval(loadTenantStatus, 60000);
+    return () => window.clearInterval(timer);
+  }, [user?.id, superAdmin, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated()) return;
@@ -203,6 +218,7 @@ export default function AppLayout() {
     clearUsers();
     clearSettings();
     setNotifications([]);
+    setTenantStatus(null);
     logout();
   };
 
@@ -360,6 +376,29 @@ export default function AppLayout() {
               </div>
             </div>
           </header>
+
+          {tenantStatus?.billing.status === 'overdue' && (
+            <div className="subscription-banner subscription-banner--overdue" role="status" aria-live="polite">
+              <AlertTriangle size={18} />
+              <div>
+                <strong>Mensalidade em atraso</strong>
+                <span>
+                  {tenantStatus.billing.daysPastDue} dia{tenantStatus.billing.daysPastDue === 1 ? '' : 's'} de atraso.
+                  {tenantStatus.billing.suspensionDate && ` Operações serão suspensas em ${new Date(tenantStatus.billing.suspensionDate).toLocaleDateString('pt-BR')}.`}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {tenantStatus?.billing.status === 'suspended' && (
+            <div className="subscription-banner subscription-banner--suspended" role="alert">
+              <ShieldX size={18} />
+              <div>
+                <strong>Assinatura suspensa</strong>
+                <span>Vendas e alterações estão bloqueadas. Regularize a mensalidade com o administrador da plataforma.</span>
+              </div>
+            </div>
+          )}
 
           <div className="content-scroll">
             <Routes>

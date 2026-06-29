@@ -3,7 +3,11 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const { normalizeEstablishmentCode } = require('./tenantIdentity');
 
-const db = new Database(path.join(__dirname, 'banco.sqlite'));
+const configuredDatabasePath = String(process.env.DATABASE_PATH || '').trim();
+const databasePath = configuredDatabasePath
+  ? (configuredDatabasePath === ':memory:' ? configuredDatabasePath : path.resolve(configuredDatabasePath))
+  : path.join(__dirname, 'banco.sqlite');
+const db = new Database(databasePath);
 db.pragma('foreign_keys = ON');
 
 const initDB = () => {
@@ -22,6 +26,9 @@ const initDB = () => {
       monthlyAmount REAL DEFAULT 0,
       subscriptionStatus TEXT DEFAULT 'active',
       subscriptionDueDate TEXT,
+      subscriptionGraceDays INTEGER DEFAULT 7,
+      subscriptionStatusReason TEXT,
+      subscriptionStatusUpdatedAt TEXT,
       notes TEXT,
       createdAt TEXT
     )
@@ -308,6 +315,9 @@ const initDB = () => {
     'ALTER TABLE sales ADD COLUMN establishmentId TEXT',
     'ALTER TABLE ai_suggestions ADD COLUMN establishmentId TEXT',
     'ALTER TABLE establishments ADD COLUMN monthlyAmount REAL DEFAULT 0',
+    'ALTER TABLE establishments ADD COLUMN subscriptionGraceDays INTEGER DEFAULT 7',
+    'ALTER TABLE establishments ADD COLUMN subscriptionStatusReason TEXT',
+    'ALTER TABLE establishments ADD COLUMN subscriptionStatusUpdatedAt TEXT',
     'ALTER TABLE payment_transactions ADD COLUMN payload TEXT',
     'ALTER TABLE payment_transactions ADD COLUMN error TEXT',
     "ALTER TABLE fiscal_settings ADD COLUMN providerMode TEXT DEFAULT 'simulated'",

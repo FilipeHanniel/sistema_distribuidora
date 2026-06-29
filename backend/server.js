@@ -73,6 +73,11 @@ const {
   DEFAULT_TENANT_SETTINGS,
   validateTenantSettings,
 } = require('./tenantSettingsPolicy');
+const {
+  DEFAULT_GRACE_DAYS,
+  evaluateSubscription,
+  normalizeGraceDays,
+} = require('./subscriptionPolicy');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -99,6 +104,20 @@ const configuredProcessingTimeout = Number(process.env.PAYMENT_PROCESSING_TIMEOU
 const PAYMENT_PROCESSING_TIMEOUT_MS = Number.isFinite(configuredProcessingTimeout)
   ? Math.max(30000, configuredProcessingTimeout)
   : 120000;
+const DEFAULT_SUBSCRIPTION_GRACE_DAYS = normalizeGraceDays(
+  process.env.SUBSCRIPTION_GRACE_DAYS,
+  DEFAULT_GRACE_DAYS
+);
+const configuredSubscriptionInterval = Number(process.env.SUBSCRIPTION_RECONCILIATION_INTERVAL_MS || 60 * 60 * 1000);
+const SUBSCRIPTION_RECONCILIATION_INTERVAL_MS = Number.isFinite(configuredSubscriptionInterval)
+  ? Math.max(60 * 1000, configuredSubscriptionInterval)
+  : 60 * 60 * 1000;
+const SUBSCRIPTION_REMINDER_DAYS = [...new Set(
+  String(process.env.SUBSCRIPTION_REMINDER_DAYS || '3,1,0')
+    .split(',')
+    .map(value => Number(value.trim()))
+    .filter(value => Number.isInteger(value) && value >= 0 && value <= 30)
+)];
 const SESSION_GENERATION_ID = crypto.randomUUID();
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
@@ -165,12 +184,13 @@ function isRateLimited(ip) {
 function clearRateLimit(ip) { loginAttempts.delete(ip); }
 
 // Limpar entradas expiradas a cada 10 minutos
-setInterval(() => {
+const loginRateLimitCleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of loginAttempts.entries()) {
     if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) loginAttempts.delete(ip);
   }
 }, 10 * 60 * 1000);
+loginRateLimitCleanupTimer.unref();
 
 // ==============================
 // MIDDLEWARES DE AUTENTICAÇÃO
@@ -243,6 +263,17 @@ const ensureEstablishmentExists = (establishmentId) => {
   return db.prepare('SELECT * FROM establishments WHERE id = ?').get(establishmentId);
 };
 
+const getSubscriptionBilling = (establishment, now = new Date()) => ({
+  dueDate: establishment.subscriptionDueDate || null,
+  ...evaluateSubscription({
+    dueDate: establishment.subscriptionDueDate,
+    currentStatus: establishment.subscriptionStatus,
+    statusReason: establishment.subscriptionStatusReason,
+    graceDays: establishment.subscriptionGraceDays ?? DEFAULT_SUBSCRIPTION_GRACE_DAYS,
+    now,
+  }),
+});
+
 const canAccessTenantRecord = (req, table, id) => {
   if (req.user.role === 'superadmin') return db.prepare(`SELECT id, establishmentId FROM ${table} WHERE id = ?`).get(id);
   return db.prepare(`SELECT id, establishmentId FROM ${table} WHERE id = ? AND establishmentId = ?`).get(id, req.user.establishmentId);
@@ -286,18 +317,22 @@ const buildTenantStatus = (establishmentId) => {
   const establishment = ensureEstablishmentExists(establishmentId);
   if (!establishment) return null;
   const plan = getPlanDefinition(establishment.plan);
-  const subscription = getSubscriptionAccess(establishment.subscriptionStatus);
+  const billing = getSubscriptionBilling(establishment);
+  const subscription = getSubscriptionAccess(billing.status);
   return {
     establishment: {
       id: establishment.id,
       name: establishment.name,
       plan: plan.key,
-      subscriptionStatus: normalizeSubscriptionStatus(establishment.subscriptionStatus),
+      subscriptionStatus: billing.status,
       subscriptionDueDate: establishment.subscriptionDueDate,
+      subscriptionGraceDays: billing.graceDays,
+      subscriptionStatusReason: billing.reason || null,
     },
     plan,
     usage: getTenantUsage(establishmentId),
     subscription,
+    billing,
   };
 };
 
@@ -1225,6 +1260,81 @@ const createNotification = ({ establishmentId, userId = null, audience = 'gestor
   return id;
 };
 
+const reconcileSubscriptions = ({ now = new Date() } = {}) => {
+  const establishments = db.prepare('SELECT * FROM establishments').all();
+  const summary = { checked: establishments.length, changed: 0, active: 0, overdue: 0, suspended: 0 };
+  const statusUpdate = db.prepare(`
+    UPDATE establishments
+    SET subscriptionStatus = ?, subscriptionStatusReason = ?, subscriptionStatusUpdatedAt = ?
+    WHERE id = ?
+  `);
+
+  for (const establishment of establishments) {
+    const billing = getSubscriptionBilling(establishment, now);
+    summary[billing.status] += 1;
+
+    const currentReason = establishment.subscriptionStatusReason || null;
+    const nextReason = billing.reason || null;
+    if (establishment.subscriptionStatus !== billing.status || currentReason !== nextReason) {
+      statusUpdate.run(billing.status, nextReason, now.toISOString(), establishment.id);
+      summary.changed += 1;
+      logAudit({
+        req: { user: { role: 'system' } },
+        establishmentId: establishment.id,
+        action: 'subscription.auto_status_updated',
+        entityType: 'establishment',
+        entityId: establishment.id,
+        metadata: {
+          previousStatus: establishment.subscriptionStatus,
+          subscriptionStatus: billing.status,
+          reason: nextReason,
+          dueDate: billing.dueDate,
+          daysPastDue: billing.daysPastDue,
+        },
+      });
+    }
+
+    if (!billing.dueDate || billing.manualSuspension) continue;
+    const dueReference = `${establishment.id}:${String(billing.dueDate).slice(0, 10)}`;
+    if (billing.status === 'active' && SUBSCRIPTION_REMINDER_DAYS.includes(billing.daysUntilDue)) {
+      const dueMessage = billing.daysUntilDue === 0
+        ? 'A mensalidade da plataforma vence hoje.'
+        : `A mensalidade da plataforma vence em ${billing.daysUntilDue} dia${billing.daysUntilDue === 1 ? '' : 's'}.`;
+      createNotification({
+        establishmentId: establishment.id,
+        audience: 'gestor',
+        type: 'subscription_due_soon',
+        title: billing.daysUntilDue === 0 ? 'Mensalidade vence hoje' : 'Vencimento proximo',
+        message: dueMessage,
+        referenceType: 'subscription',
+        referenceId: `${dueReference}:due:${billing.daysUntilDue}`,
+      });
+    } else if (billing.status === 'overdue') {
+      createNotification({
+        establishmentId: establishment.id,
+        audience: 'gestor',
+        type: 'subscription_overdue',
+        title: 'Mensalidade em atraso',
+        message: `Pagamento atrasado ha ${billing.daysPastDue} dia${billing.daysPastDue === 1 ? '' : 's'}. O acesso sera suspenso ao fim da tolerancia de ${billing.graceDays} dias.`,
+        referenceType: 'subscription',
+        referenceId: `${dueReference}:overdue`,
+      });
+    } else if (billing.status === 'suspended' && billing.reason === 'past_due') {
+      createNotification({
+        establishmentId: establishment.id,
+        audience: 'gestor',
+        type: 'subscription_suspended',
+        title: 'Assinatura suspensa',
+        message: 'O periodo de tolerancia terminou. Vendas e alteracoes estao bloqueadas ate a regularizacao.',
+        referenceType: 'subscription',
+        referenceId: `${dueReference}:suspended`,
+      });
+    }
+  }
+
+  return summary;
+};
+
 const generateScheduledAiReports = async (periodType = 'daily') => {
   if (!geminiModel) return;
   const ests = db.prepare("SELECT id FROM establishments WHERE subscriptionStatus != 'suspended'").all();
@@ -1317,7 +1427,8 @@ app.post('/api/login', (req, res) => {
       if (!est) {
         return res.status(403).json({ error: 'Estabelecimento não encontrado.' });
       }
-      if (est?.subscriptionStatus === 'suspended') {
+      const billing = getSubscriptionBilling(est);
+      if (billing.status === 'suspended' && user.role !== 'gestor') {
         return res.status(403).json({ error: 'Acesso suspenso. Entre em contato com o administrador do sistema.' });
       }
     }
@@ -3055,6 +3166,16 @@ app.get('/api/admin/plans', authenticateToken, isSuperAdmin, (req, res) => {
   res.json(getPlanCatalogList());
 });
 
+app.post('/api/admin/subscriptions/reconcile', authenticateToken, isSuperAdmin, (req, res) => {
+  try {
+    const summary = reconcileSubscriptions();
+    res.json({ message: 'Assinaturas atualizadas.', summary });
+  } catch (err) {
+    console.error('[Subscription Reconciliation Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/stats', authenticateToken, isSuperAdmin, (req, res) => {
   try {
     const requestedPeriod = Number(req.query.periodDays || req.query.period || 30);
@@ -3338,6 +3459,7 @@ app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res)
         ...est,
         plan: normalizePlan(est.plan),
         planDefinition: getPlanDefinition(est.plan),
+        billing: getSubscriptionBilling(est),
         usage: getTenantUsage(est.id),
         userCount,
         salesCount,
@@ -3352,7 +3474,7 @@ app.get('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res)
 });
 
 app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res) => {
-  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionDueDate, gestorUsername, gestorPassword, gestorName } = req.body;
+  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionDueDate, subscriptionGraceDays, gestorUsername, gestorPassword, gestorName } = req.body;
   if (!name || !gestorUsername || !gestorPassword || !gestorName) {
     return res.status(400).json({ error: 'Nome do estabelecimento, login, senha e nome do gestor são obrigatórios.' });
   }
@@ -3369,27 +3491,31 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
   const gestorId = uuidv4();
   const now = new Date().toISOString();
   const normalizedPlan = normalizePlan(plan || 'basic');
+  const graceDays = normalizeGraceDays(subscriptionGraceDays, DEFAULT_SUBSCRIPTION_GRACE_DAYS);
   // Assinatura mensal: vence no mesmo dia do mês seguinte
   const dueDate = subscriptionDueDate || addOneMonth(now);
 
   try {
     const createEstAndGestor = db.transaction(() => {
-      db.prepare(`INSERT INTO establishments (id, name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
+      db.prepare(`INSERT INTO establishments (
+        id, name, loginCode, ownerName, email, phone, plan, monthlyAmount,
+        subscriptionStatus, subscriptionDueDate, subscriptionGraceDays, subscriptionStatusUpdatedAt, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`)
         .run(estId, name, normalizedLoginCode, ownerName || gestorName, email || null, phone || null, normalizedPlan,
-          parseFloat(monthlyAmount) || 0, dueDate, now);
+          parseFloat(monthlyAmount) || 0, dueDate, graceDays, now, now);
       db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
         VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, ?)`)
         .run(gestorId, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), gestorName.trim(), estId, now);
     });
     createEstAndGestor();
+    reconcileSubscriptions();
     logAudit({
       req,
       establishmentId: estId,
       action: 'establishment.created',
       entityType: 'establishment',
       entityId: estId,
-      metadata: { name, loginCode: normalizedLoginCode, plan: normalizedPlan, gestorUsername: usernameResult.username },
+      metadata: { name, loginCode: normalizedLoginCode, plan: normalizedPlan, graceDays, gestorUsername: usernameResult.username },
     });
     res.status(201).json({ id: estId, message: 'Estabelecimento criado com sucesso!' });
   } catch (err) {
@@ -3402,7 +3528,7 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
 
 app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
-  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, notes } = req.body;
+  const { name, loginCode, ownerName, email, phone, plan, monthlyAmount, subscriptionStatus, subscriptionDueDate, subscriptionGraceDays, notes } = req.body;
   try {
     const current = ensureEstablishmentExists(id);
     if (!current) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
@@ -3412,15 +3538,21 @@ app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, 
     }
     const normalizedPlan = normalizePlan(plan || 'basic');
     const normalizedStatus = normalizeSubscriptionStatus(subscriptionStatus || 'active');
-    db.prepare(`UPDATE establishments SET name=?, loginCode=?, ownerName=?, email=?, phone=?, plan=?, monthlyAmount=?, subscriptionStatus=?, subscriptionDueDate=?, notes=? WHERE id=?`)
-      .run(name, normalizedLoginCode, ownerName, email, phone, normalizedPlan, parseFloat(monthlyAmount) || 0, normalizedStatus, subscriptionDueDate, notes || null, id);
+    const graceDays = normalizeGraceDays(subscriptionGraceDays, current.subscriptionGraceDays ?? DEFAULT_SUBSCRIPTION_GRACE_DAYS);
+    const statusReason = normalizedStatus === 'suspended' ? 'manual' : null;
+    const statusUpdatedAt = new Date().toISOString();
+    db.prepare(`UPDATE establishments SET name=?, loginCode=?, ownerName=?, email=?, phone=?, plan=?, monthlyAmount=?,
+      subscriptionStatus=?, subscriptionDueDate=?, subscriptionGraceDays=?, subscriptionStatusReason=?, subscriptionStatusUpdatedAt=?, notes=? WHERE id=?`)
+      .run(name, normalizedLoginCode, ownerName, email, phone, normalizedPlan, parseFloat(monthlyAmount) || 0,
+        normalizedStatus, subscriptionDueDate, graceDays, statusReason, statusUpdatedAt, notes || null, id);
+    reconcileSubscriptions();
     logAudit({
       req,
       establishmentId: id,
       action: 'establishment.updated',
       entityType: 'establishment',
       entityId: id,
-      metadata: { loginCode: normalizedLoginCode, plan: normalizedPlan, subscriptionStatus: normalizedStatus, monthlyAmount: parseFloat(monthlyAmount) || 0 },
+      metadata: { loginCode: normalizedLoginCode, plan: normalizedPlan, subscriptionStatus: normalizedStatus, graceDays, monthlyAmount: parseFloat(monthlyAmount) || 0 },
     });
     res.json({ message: 'Estabelecimento atualizado!' });
   } catch (err) {
@@ -3433,18 +3565,25 @@ app.put('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (req, 
 
 app.patch('/api/admin/establishments/:id/subscription', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
-  const { subscriptionStatus, subscriptionDueDate } = req.body;
+  const { subscriptionStatus, subscriptionDueDate, subscriptionGraceDays } = req.body;
   try {
+    const current = ensureEstablishmentExists(id);
+    if (!current) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
     const normalizedStatus = normalizeSubscriptionStatus(subscriptionStatus || 'active');
-    db.prepare('UPDATE establishments SET subscriptionStatus=?, subscriptionDueDate=? WHERE id=?')
-      .run(normalizedStatus, subscriptionDueDate, id);
+    const graceDays = normalizeGraceDays(subscriptionGraceDays, current.subscriptionGraceDays ?? DEFAULT_SUBSCRIPTION_GRACE_DAYS);
+    const statusReason = normalizedStatus === 'suspended' ? 'manual' : null;
+    const statusUpdatedAt = new Date().toISOString();
+    db.prepare(`UPDATE establishments SET subscriptionStatus=?, subscriptionDueDate=?, subscriptionGraceDays=?,
+      subscriptionStatusReason=?, subscriptionStatusUpdatedAt=? WHERE id=?`)
+      .run(normalizedStatus, subscriptionDueDate, graceDays, statusReason, statusUpdatedAt, id);
+    reconcileSubscriptions();
     logAudit({
       req,
       establishmentId: id,
       action: 'subscription.updated',
       entityType: 'establishment',
       entityId: id,
-      metadata: { subscriptionStatus: normalizedStatus, subscriptionDueDate },
+      metadata: { subscriptionStatus: normalizedStatus, subscriptionDueDate, graceDays, statusReason },
     });
     res.json({ message: 'Assinatura atualizada!' });
   } catch (err) {
@@ -3584,7 +3723,7 @@ app.get('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdmi
 app.post('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdmin, (req, res) => {
   const { id } = req.params;
   const { amount, notes } = req.body;
-  if (!amount || isNaN(parseFloat(amount))) {
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
     return res.status(400).json({ error: 'Valor do pagamento é obrigatório.' });
   }
 
@@ -3596,14 +3735,22 @@ app.post('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdm
     const currentDueDate = est.subscriptionDueDate || now;
     const newDueDate = addOneMonth(currentDueDate);
     const paymentId = uuidv4();
+    const billingAfterPayment = evaluateSubscription({
+      dueDate: newDueDate,
+      currentStatus: est.subscriptionStatus,
+      statusReason: est.subscriptionStatusReason,
+      graceDays: est.subscriptionGraceDays ?? DEFAULT_SUBSCRIPTION_GRACE_DAYS,
+      now,
+    });
 
     const registerPayment = db.transaction(() => {
       // Registrar pagamento
       db.prepare(`INSERT INTO payments (id, establishmentId, amount, dueDate, paidAt, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(paymentId, id, parseFloat(amount), currentDueDate, now, notes || null, now);
-      // Avançar vencimento 1 mês e ativar assinatura
-      db.prepare('UPDATE establishments SET subscriptionDueDate = ?, subscriptionStatus = ? WHERE id = ?')
-        .run(newDueDate, 'active', id);
+      // Avanca um ciclo e recalcula o status; dividas antigas continuam visiveis.
+      db.prepare(`UPDATE establishments SET subscriptionDueDate = ?, subscriptionStatus = ?,
+        subscriptionStatusReason = ?, subscriptionStatusUpdatedAt = ? WHERE id = ?`)
+        .run(newDueDate, billingAfterPayment.status, billingAfterPayment.reason || null, now, id);
     });
     registerPayment();
     logAudit({
@@ -3612,12 +3759,29 @@ app.post('/api/admin/establishments/:id/payments', authenticateToken, isSuperAdm
       action: 'platform_payment.registered',
       entityType: 'payment',
       entityId: paymentId,
-      metadata: { amount: parseFloat(amount), previousDueDate: currentDueDate, newDueDate, notes: notes || null },
+      metadata: {
+        amount: parseFloat(amount),
+        previousDueDate: currentDueDate,
+        newDueDate,
+        subscriptionStatus: billingAfterPayment.status,
+        notes: notes || null,
+      },
+    });
+
+    createNotification({
+      establishmentId: id,
+      audience: 'gestor',
+      type: 'subscription_payment_registered',
+      title: 'Pagamento da mensalidade registrado',
+      message: `Pagamento de R$ ${parseFloat(amount).toFixed(2).replace('.', ',')} confirmado. Novo vencimento em ${new Date(newDueDate).toLocaleDateString('pt-BR')}.`,
+      referenceType: 'payment',
+      referenceId: paymentId,
     });
 
     res.status(201).json({
       message: 'Pagamento registrado! Próximo vencimento: ' + new Date(newDueDate).toLocaleDateString('pt-BR'),
       newDueDate,
+      subscriptionStatus: billingAfterPayment.status,
       paymentId,
     });
   } catch (err) {
@@ -3747,7 +3911,7 @@ app.use('/api', (req, res) => {
 });
 
 let lastScheduledMinute = '';
-setInterval(() => {
+const scheduledReportsTimer = setInterval(() => {
   const now = new Date();
   const key = now.toISOString().slice(0, 16);
   if (key === lastScheduledMinute) return;
@@ -3766,6 +3930,24 @@ setInterval(() => {
     if (now.getDay() === 1) publishScheduledReportNotifications('weekly');
   }
 }, 60 * 1000);
+scheduledReportsTimer.unref();
+
+const startSubscriptionReconciliation = () => {
+  const run = () => {
+    try {
+      const summary = reconcileSubscriptions();
+      if (summary.changed > 0) {
+        console.log('[Subscriptions] Reconciliacao concluida:', summary);
+      }
+    } catch (err) {
+      console.error('[Subscriptions] Falha na reconciliacao:', err.message);
+    }
+  };
+  run();
+  const timer = setInterval(run, SUBSCRIPTION_RECONCILIATION_INTERVAL_MS);
+  timer.unref();
+  return timer;
+};
 
 if (NODE_ENV === 'production') {
   app.use((req, res) => {
@@ -3774,10 +3956,16 @@ if (NODE_ENV === 'production') {
   });
 }
 
-app.listen(PORT, HOST, () => {
+const startServer = ({ port = PORT, host = HOST } = {}) => app.listen(port, host, () => {
   console.log(`[Payments] Confirmacao por polling a cada ${PAYMENT_POLLING_INTERVAL_MS}ms`);
-  console.log(`🚀 Servidor rodando em http://${HOST}:${PORT} [${NODE_ENV}]`);
+  console.log(`Servidor rodando em http://${host}:${port} [${NODE_ENV}]`);
 });
 
-process.on('SIGTERM', () => { console.log('🛑 SIGTERM. Encerrando...'); process.exit(0); });
-process.on('SIGINT', () => { console.log('🛑 SIGINT. Encerrando...'); process.exit(0); });
+if (require.main === module) {
+  startSubscriptionReconciliation();
+  startServer();
+  process.on('SIGTERM', () => { console.log('SIGTERM. Encerrando...'); process.exit(0); });
+  process.on('SIGINT', () => { console.log('SIGINT. Encerrando...'); process.exit(0); });
+}
+
+module.exports = { app, reconcileSubscriptions, startServer };
