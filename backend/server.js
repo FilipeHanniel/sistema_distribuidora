@@ -79,6 +79,14 @@ const {
   normalizeGraceDays,
 } = require('./subscriptionPolicy');
 const { buildOnboardingStatus } = require('./onboardingPolicy');
+const {
+  InventoryError,
+  cancelPurchase,
+  getPurchaseWithItems,
+  normalizePurchaseItems,
+  normalizeSupplierPayload,
+  receivePurchase,
+} = require('./inventoryService');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -430,6 +438,14 @@ const logAudit = ({ req, establishmentId, action, entityType, entityId, metadata
   } catch (err) {
     console.error('[Audit Log Error]', err.message);
   }
+};
+
+const sendInventoryError = (res, err) => {
+  if (err instanceof InventoryError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
+  }
+  console.error('[Inventory Error]', err);
+  return res.status(500).json({ error: 'Nao foi possivel concluir a operacao de estoque.' });
 };
 
 const credentialKey = crypto.createHash('sha256').update(JWT_SECRET).digest();
@@ -1021,7 +1037,7 @@ const validateSaleItemsForTenant = (items, estId, { expectedTotal = null, useCur
     throw saleValidationError('Valor total da venda invalido.');
   }
 
-  const normalizedItems = items.map((item) => {
+  const rawNormalizedItems = items.map((item) => {
     const product = db.prepare('SELECT id, name, sellPrice, stock, category FROM products WHERE id = ? AND establishmentId = ?')
       .get(item.productId, estId);
     if (!product) throw saleValidationError(`Produto '${item.name}' nao pertence a este estabelecimento.`);
@@ -1050,6 +1066,26 @@ const validateSaleItemsForTenant = (items, estId, { expectedTotal = null, useCur
     };
   });
 
+  const groupedItems = new Map();
+  for (const item of rawNormalizedItems) {
+    const current = groupedItems.get(item.productId);
+    if (!current) {
+      groupedItems.set(item.productId, { ...item });
+      continue;
+    }
+    current.quantity += item.quantity;
+    current.totalPrice = roundMoney(current.totalPrice + item.totalPrice);
+    current.unitPrice = roundMoney(current.totalPrice / current.quantity);
+  }
+  const normalizedItems = [...groupedItems.values()];
+  for (const item of normalizedItems) {
+    const available = db.prepare('SELECT stock FROM products WHERE id = ? AND establishmentId = ?')
+      .get(item.productId, estId)?.stock;
+    if (Number(available) < item.quantity) {
+      throw saleValidationError(`Estoque insuficiente para '${item.name}'.`, 409);
+    }
+  }
+
   const totalAmount = roundMoney(normalizedItems.reduce((sum, item) => sum + item.totalPrice, 0));
   if (expectedTotal !== null && Math.abs(totalAmount - roundMoney(expectedTotal)) > 0.009) {
     throw saleValidationError('O valor da venda mudou. Atualize o carrinho e tente novamente.', 409);
@@ -1069,12 +1105,28 @@ const createPaidSale = async (items, totalAmount, paymentMethod, userId, estId, 
       SET stock = stock - ?, updatedAt = ?
       WHERE id = ? AND establishmentId = ? AND stock >= ?
     `);
+    const getProductStmt = db.prepare('SELECT name, stock, costPrice FROM products WHERE id = ? AND establishmentId = ?');
+    const insertMovementStmt = db.prepare(`
+      INSERT INTO stock_movements (
+        id, establishmentId, productId, productName, type, quantity,
+        stockBefore, stockAfter, unitCost, referenceType, referenceId,
+        notes, userId, createdAt
+      ) VALUES (?, ?, ?, ?, 'sale', ?, ?, ?, ?, 'sale', ?, ?, ?, ?)
+    `);
     for (const item of items) {
+      const product = getProductStmt.get(item.productId, estId);
+      if (!product) throw saleValidationError(`Produto '${item.name}' nao encontrado.`, 404);
+      const stockBefore = Number(product.stock || 0);
       const stockUpdate = updateStockStmt.run(item.quantity, now, item.productId, estId, item.quantity);
       if (stockUpdate.changes !== 1) {
         throw saleValidationError(`Estoque insuficiente para '${item.name}'.`, 409);
       }
       insertItemStmt.run(saleId, item.productId, item.name, item.quantity, item.unitPrice, item.totalPrice);
+      insertMovementStmt.run(
+        uuidv4(), estId, item.productId, item.name, -Number(item.quantity),
+        stockBefore, stockBefore - Number(item.quantity), Number(product.costPrice || 0),
+        saleId, `Venda ${saleId}`, userId, now
+      );
     }
   });
   insertSale();
@@ -1806,6 +1858,333 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
 });
 
 // ==============================
+// FORNECEDORES, COMPRAS E ESTOQUE
+// ==============================
+app.get('/api/suppliers', authenticateToken, isGestor, (req, res) => {
+  try {
+    const includeInactive = String(req.query.includeInactive || '') === 'true';
+    const rows = db.prepare(`
+      SELECT s.*,
+        (SELECT COUNT(*) FROM purchases p WHERE p.supplierId = s.id) AS purchaseCount
+      FROM suppliers s
+      WHERE s.establishmentId = ? ${includeInactive ? '' : 'AND s.active = 1'}
+      ORDER BY s.active DESC, s.name COLLATE NOCASE
+    `).all(req.user.establishmentId);
+    res.json(rows);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.post('/api/suppliers', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const supplier = normalizeSupplierPayload(req.body);
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO suppliers (
+        id, establishmentId, name, legalName, document, email, phone,
+        contactName, notes, active, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, req.user.establishmentId, supplier.name, supplier.legalName, supplier.document,
+      supplier.email, supplier.phone, supplier.contactName, supplier.notes,
+      supplier.active, now, now
+    );
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'supplier.created',
+      entityType: 'supplier',
+      entityId: id,
+      metadata: { name: supplier.name },
+    });
+    res.status(201).json(db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id));
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.put('/api/suppliers/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const current = db.prepare('SELECT * FROM suppliers WHERE id = ? AND establishmentId = ?')
+      .get(req.params.id, req.user.establishmentId);
+    if (!current) throw new InventoryError('Fornecedor nao encontrado.', 404);
+    const supplier = normalizeSupplierPayload(req.body);
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE suppliers SET
+        name = ?, legalName = ?, document = ?, email = ?, phone = ?,
+        contactName = ?, notes = ?, active = ?, updatedAt = ?
+      WHERE id = ? AND establishmentId = ?
+    `).run(
+      supplier.name, supplier.legalName, supplier.document, supplier.email,
+      supplier.phone, supplier.contactName, supplier.notes, supplier.active,
+      now, current.id, req.user.establishmentId
+    );
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'supplier.updated',
+      entityType: 'supplier',
+      entityId: current.id,
+      metadata: { name: supplier.name, active: supplier.active },
+    });
+    res.json(db.prepare('SELECT * FROM suppliers WHERE id = ?').get(current.id));
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.delete('/api/suppliers/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ? AND establishmentId = ?')
+      .get(req.params.id, req.user.establishmentId);
+    if (!supplier) throw new InventoryError('Fornecedor nao encontrado.', 404);
+    const linked = db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE supplierId = ?').get(supplier.id).count;
+    if (linked > 0) {
+      db.prepare('UPDATE suppliers SET active = 0, updatedAt = ? WHERE id = ?')
+        .run(new Date().toISOString(), supplier.id);
+    } else {
+      db.prepare('DELETE FROM suppliers WHERE id = ?').run(supplier.id);
+    }
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: linked > 0 ? 'supplier.deactivated' : 'supplier.deleted',
+      entityType: 'supplier',
+      entityId: supplier.id,
+      metadata: { name: supplier.name, linkedPurchases: linked },
+    });
+    res.json({ message: linked > 0 ? 'Fornecedor inativado para preservar o historico.' : 'Fornecedor excluido.' });
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.get('/api/purchases', authenticateToken, isGestor, (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim();
+    const validStatuses = new Set(['draft', 'received', 'cancelled']);
+    const statusFilter = validStatuses.has(status) ? 'AND p.status = ?' : '';
+    const params = validStatuses.has(status)
+      ? [req.user.establishmentId, status]
+      : [req.user.establishmentId];
+    const rows = db.prepare(`
+      SELECT p.*, s.name AS supplierName,
+        (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchaseId = p.id) AS itemCount,
+        u.name AS createdByName
+      FROM purchases p
+      LEFT JOIN suppliers s ON s.id = p.supplierId
+      LEFT JOIN users u ON u.id = p.createdByUserId
+      WHERE p.establishmentId = ? ${statusFilter}
+      ORDER BY p.createdAt DESC
+    `).all(...params);
+    res.json(rows);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.get('/api/purchases/:id', authenticateToken, isGestor, (req, res) => {
+  try {
+    const purchase = getPurchaseWithItems(db, req.params.id, req.user.establishmentId);
+    if (!purchase) throw new InventoryError('Compra nao encontrada.', 404);
+    res.json(purchase);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+const preparePurchasePayload = (req) => {
+  const establishmentId = req.user.establishmentId;
+  const supplierId = String(req.body?.supplierId || '').trim() || null;
+  if (supplierId) {
+    const supplier = db.prepare('SELECT id FROM suppliers WHERE id = ? AND establishmentId = ? AND active = 1')
+      .get(supplierId, establishmentId);
+    if (!supplier) throw new InventoryError('Selecione um fornecedor ativo deste estabelecimento.', 404);
+  }
+  const items = normalizePurchaseItems(db, establishmentId, req.body?.items);
+  return {
+    supplierId,
+    invoiceNumber: String(req.body?.invoiceNumber || '').trim() || null,
+    notes: String(req.body?.notes || '').trim() || null,
+    items,
+    totalAmount: roundMoney(items.reduce((sum, item) => sum + item.totalCost, 0)),
+  };
+};
+
+app.post('/api/purchases', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const payload = preparePurchasePayload(req);
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO purchases (
+          id, establishmentId, supplierId, invoiceNumber, status, totalAmount,
+          notes, createdByUserId, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
+      `).run(
+        id, req.user.establishmentId, payload.supplierId, payload.invoiceNumber,
+        payload.totalAmount, payload.notes, req.user.id, now, now
+      );
+      const insertItem = db.prepare(`
+        INSERT INTO purchase_items (
+          id, purchaseId, productId, productName, quantity, unitCost, totalCost
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const item of payload.items) {
+        insertItem.run(uuidv4(), id, item.productId, item.productName, item.quantity, item.unitCost, item.totalCost);
+      }
+    })();
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'purchase.created',
+      entityType: 'purchase',
+      entityId: id,
+      metadata: { totalAmount: payload.totalAmount, itemCount: payload.items.length },
+    });
+    res.status(201).json(getPurchaseWithItems(db, id, req.user.establishmentId));
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.put('/api/purchases/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const current = db.prepare('SELECT * FROM purchases WHERE id = ? AND establishmentId = ?')
+      .get(req.params.id, req.user.establishmentId);
+    if (!current) throw new InventoryError('Compra nao encontrada.', 404);
+    if (current.status !== 'draft') throw new InventoryError('Somente rascunhos podem ser editados.', 409);
+    const payload = preparePurchasePayload(req);
+    const now = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE purchases
+        SET supplierId = ?, invoiceNumber = ?, totalAmount = ?, notes = ?, updatedAt = ?
+        WHERE id = ? AND establishmentId = ? AND status = 'draft'
+      `).run(
+        payload.supplierId, payload.invoiceNumber, payload.totalAmount, payload.notes,
+        now, current.id, req.user.establishmentId
+      );
+      db.prepare('DELETE FROM purchase_items WHERE purchaseId = ?').run(current.id);
+      const insertItem = db.prepare(`
+        INSERT INTO purchase_items (
+          id, purchaseId, productId, productName, quantity, unitCost, totalCost
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const item of payload.items) {
+        insertItem.run(uuidv4(), current.id, item.productId, item.productName, item.quantity, item.unitCost, item.totalCost);
+      }
+    })();
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'purchase.updated',
+      entityType: 'purchase',
+      entityId: current.id,
+      metadata: { totalAmount: payload.totalAmount, itemCount: payload.items.length },
+    });
+    res.json(getPurchaseWithItems(db, current.id, req.user.establishmentId));
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.post('/api/purchases/:id/receive', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const purchase = receivePurchase({
+      db,
+      purchaseId: req.params.id,
+      establishmentId: req.user.establishmentId,
+      userId: req.user.id,
+      uuid: uuidv4,
+    });
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'purchase.received',
+      entityType: 'purchase',
+      entityId: purchase.id,
+      metadata: { totalAmount: purchase.totalAmount, itemCount: purchase.items.length },
+    });
+    res.json(purchase);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.post('/api/purchases/:id/cancel', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const purchase = cancelPurchase({
+      db,
+      purchaseId: req.params.id,
+      establishmentId: req.user.establishmentId,
+      userId: req.user.id,
+      uuid: uuidv4,
+    });
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'purchase.cancelled',
+      entityType: 'purchase',
+      entityId: purchase.id,
+      metadata: { totalAmount: purchase.totalAmount },
+    });
+    res.json(purchase);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.delete('/api/purchases/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+  try {
+    const purchase = db.prepare('SELECT * FROM purchases WHERE id = ? AND establishmentId = ?')
+      .get(req.params.id, req.user.establishmentId);
+    if (!purchase) throw new InventoryError('Compra nao encontrada.', 404);
+    if (purchase.status !== 'draft') throw new InventoryError('Somente rascunhos podem ser excluidos.', 409);
+    db.prepare('DELETE FROM purchases WHERE id = ?').run(purchase.id);
+    logAudit({
+      req,
+      establishmentId: req.user.establishmentId,
+      action: 'purchase.deleted',
+      entityType: 'purchase',
+      entityId: purchase.id,
+    });
+    res.json({ message: 'Rascunho excluido.' });
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+app.get('/api/stock-movements', authenticateToken, isGestor, (req, res) => {
+  try {
+    const clauses = ['establishmentId = ?'];
+    const params = [req.user.establishmentId];
+    const productId = String(req.query.productId || '').trim();
+    const type = String(req.query.type || '').trim();
+    const startDate = String(req.query.startDate || '').trim();
+    const endDate = String(req.query.endDate || '').trim();
+    if (productId) { clauses.push('productId = ?'); params.push(productId); }
+    if (type) { clauses.push('type = ?'); params.push(type); }
+    if (startDate) { clauses.push('createdAt >= ?'); params.push(startDate); }
+    if (endDate) { clauses.push('createdAt < ?'); params.push(endDate); }
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const rows = db.prepare(`
+      SELECT * FROM stock_movements
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY createdAt DESC, rowid DESC
+      LIMIT ${limit}
+    `).all(...params);
+    res.json(rows);
+  } catch (err) {
+    sendInventoryError(res, err);
+  }
+});
+
+// ==============================
 // PRODUTOS
 // ==============================
 app.get('/api/products', authenticateToken, (req, res) => {
@@ -1825,6 +2204,10 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
   const id = uuidv4();
   const now = new Date().toISOString();
   const estId = getTenantId(req);
+  const initialStock = Number(stock || 0);
+  if (!Number.isInteger(initialStock) || initialStock < 0) {
+    return res.status(400).json({ error: 'O estoque inicial deve ser um numero inteiro maior ou igual a zero.' });
+  }
   if (!estId || !ensureEstablishmentExists(estId)) {
     return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
   }
@@ -1845,17 +2228,29 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
         },
       });
     }
-    db.prepare(`
-      INSERT INTO products (
-        id, barcode, name, costPrice, sellPrice, stock, category,
-        ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate,
-        establishmentId, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id, barcode || '', name, costPrice, sellPrice, stock || 0, category || 'Geral',
-      ncm || null, cfop || null, csosn || null, cst || null, fiscalUnit || 'UN', origin || '0', Number(taxRate || 0),
-      estId, now, now
-    );
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO products (
+          id, barcode, name, costPrice, sellPrice, stock, category,
+          ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate,
+          establishmentId, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, barcode || '', name, costPrice, sellPrice, initialStock, category || 'Geral',
+        ncm || null, cfop || null, csosn || null, cst || null, fiscalUnit || 'UN', origin || '0', Number(taxRate || 0),
+        estId, now, now
+      );
+      db.prepare(`
+        INSERT INTO stock_movements (
+          id, establishmentId, productId, productName, type, quantity,
+          stockBefore, stockAfter, unitCost, referenceType, referenceId,
+          notes, userId, createdAt
+        ) VALUES (?, ?, ?, ?, 'initial_balance', ?, 0, ?, ?, 'product', ?, ?, ?, ?)
+      `).run(
+        `initial-${id}`, estId, id, name, initialStock, initialStock,
+        Number(costPrice || 0), id, 'Saldo informado no cadastro', req.user.id, now
+      );
+    })();
     logAudit({
       req,
       establishmentId: estId,
@@ -1876,8 +2271,17 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperatio
   const now = new Date().toISOString();
   const allowedProductFields = ['barcode', 'name', 'costPrice', 'sellPrice', 'stock', 'category', 'ncm', 'cfop', 'csosn', 'cst', 'fiscalUnit', 'origin', 'taxRate'];
   try {
-    const product = canAccessTenantRecord(req, 'products', id);
+    const access = canAccessTenantRecord(req, 'products', id);
+    const product = access
+      ? db.prepare('SELECT * FROM products WHERE id = ? AND establishmentId = ?').get(id, access.establishmentId)
+      : null;
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
+    if (updates.stock !== undefined) {
+      const requestedStock = Number(updates.stock);
+      if (!Number.isInteger(requestedStock) || requestedStock < 0) {
+        return res.status(400).json({ error: 'O estoque deve ser um numero inteiro maior ou igual a zero.' });
+      }
+    }
     let sql = 'UPDATE products SET ';
     const params = [];
     for (const [key, value] of Object.entries(updates)) {
@@ -1891,15 +2295,24 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperatio
     }
     sql += `updatedAt = ? WHERE id = ?`;
     params.push(now, id);
-    db.prepare(sql).run(...params);
-    logAudit({
-      req,
-      establishmentId: target.establishmentId,
-      action: 'user.updated',
-      entityType: 'user',
-      entityId: id,
-      metadata: { username, role: req.user.role === 'superadmin' && role ? role : target.role },
-    });
+    db.transaction(() => {
+      db.prepare(sql).run(...params);
+      if (updates.stock !== undefined && Number(updates.stock) !== Number(product.stock || 0)) {
+        const stockAfter = Number(updates.stock);
+        db.prepare(`
+          INSERT INTO stock_movements (
+            id, establishmentId, productId, productName, type, quantity,
+            stockBefore, stockAfter, unitCost, referenceType, referenceId,
+            notes, userId, createdAt
+          ) VALUES (?, ?, ?, ?, 'manual_adjustment', ?, ?, ?, ?, 'product_update', ?, ?, ?, ?)
+        `).run(
+          uuidv4(), product.establishmentId, id, updates.name || product.name,
+          stockAfter - Number(product.stock || 0), Number(product.stock || 0), stockAfter,
+          Number(updates.costPrice ?? product.costPrice ?? 0), uuidv4(),
+          'Saldo alterado na edicao do produto', req.user.id, now
+        );
+      }
+    })();
     logAudit({
       req,
       establishmentId: product.establishmentId,
@@ -1939,16 +2352,37 @@ app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, requireOpe
   const { quantityStep } = req.body;
   const now = new Date().toISOString();
   try {
-    const product = db.prepare('SELECT id FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
+    const step = Number(quantityStep);
+    if (!Number.isInteger(step) || step === 0) {
+      return res.status(400).json({ error: 'Informe uma quantidade inteira diferente de zero.' });
+    }
+    const product = db.prepare('SELECT * FROM products WHERE id = ? AND establishmentId = ?').get(id, req.user.establishmentId);
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
-    db.prepare(`UPDATE products SET stock = stock + ?, updatedAt = ? WHERE id = ? AND establishmentId = ?`).run(quantityStep, now, id, req.user.establishmentId);
+    const stockBefore = Number(product.stock || 0);
+    const stockAfter = stockBefore + step;
+    if (stockAfter < 0) return res.status(409).json({ error: 'O ajuste deixaria o estoque negativo.' });
+    db.transaction(() => {
+      db.prepare('UPDATE products SET stock = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
+        .run(stockAfter, now, id, req.user.establishmentId);
+      db.prepare(`
+        INSERT INTO stock_movements (
+          id, establishmentId, productId, productName, type, quantity,
+          stockBefore, stockAfter, unitCost, referenceType, referenceId,
+          notes, userId, createdAt
+        ) VALUES (?, ?, ?, ?, 'manual_adjustment', ?, ?, ?, ?, 'manual_adjustment', ?, ?, ?, ?)
+      `).run(
+        uuidv4(), req.user.establishmentId, id, product.name, step,
+        stockBefore, stockAfter, Number(product.costPrice || 0), uuidv4(),
+        step > 0 ? 'Entrada manual de estoque' : 'Saida manual ou perda', req.user.id, now
+      );
+    })();
     logAudit({
       req,
       establishmentId: req.user.establishmentId,
       action: 'product.stock_adjusted',
       entityType: 'product',
       entityId: id,
-      metadata: { quantityStep: Number(quantityStep) },
+      metadata: { quantityStep: step, stockBefore, stockAfter },
     });
     res.json({ message: 'Estoque ajustado!' });
   } catch (err) {

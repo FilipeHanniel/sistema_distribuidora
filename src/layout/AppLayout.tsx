@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Package, ShoppingCart, BarChart3, Users as UsersIcon,
+  LayoutDashboard, Package, PackagePlus, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
   Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards, SlidersHorizontal,
   AlertTriangle, ShieldX
@@ -10,6 +10,7 @@ import './layout.css';
 
 import Dashboard from '../pages/Dashboard';
 import Inventory from '../pages/Inventory';
+import Purchases from '../pages/Purchases';
 import Sales from '../pages/Sales';
 import Analytics from '../pages/Analytics';
 import Users from '../pages/Users';
@@ -35,6 +36,7 @@ import type { AppNotification, TenantStatus } from '../types';
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Painel de Gestão',
   '/inventory': 'Controle de Estoque',
+  '/purchases': 'Compras e Fornecedores',
   '/sales': 'Ponto de Venda',
   '/analytics': 'Estatísticas',
   '/users': 'Funcionários',
@@ -178,6 +180,7 @@ export default function AppLayout() {
     navItems = [
       { to: '/', icon: <LayoutDashboard size={20} />, label: 'Painel', end: true },
       { to: '/inventory', icon: <Package size={20} />, label: 'Estoque' },
+      { to: '/purchases', icon: <PackagePlus size={20} />, label: 'Compras' },
       { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
       { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Estatísticas' },
       { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
@@ -408,6 +411,7 @@ export default function AppLayout() {
               {/* Gestor routes */}
               <Route path="/" element={!operador ? <Dashboard /> : <Navigate to="/sales" />} />
               <Route path="/inventory" element={gestor ? <Inventory /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/purchases" element={gestor ? <Purchases /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/analytics" element={gestor ? <Analytics /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/users" element={gestor ? <Users /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
               <Route path="/pix" element={gestor ? <PixSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />

@@ -319,6 +319,99 @@ test('audita ajuste direto de estoque', async () => {
   `).get();
   assert.equal(audit.action, 'product.stock_adjusted');
   assert.equal(JSON.parse(audit.metadata).quantityStep, 2);
+  const movement = db.prepare(`
+    SELECT * FROM stock_movements
+    WHERE establishmentId = 'est-a' AND productId = 'product-a' AND type = 'manual_adjustment'
+    ORDER BY rowid DESC LIMIT 1
+  `).get();
+  assert.equal(movement.quantity, 2);
+  assert.equal(movement.stockAfter - movement.stockBefore, 2);
+});
+
+test('recebe compra com custo medio, impede duplicidade e permite reversao segura', async () => {
+  const supplier = await request('/api/suppliers', {
+    token: tokenA,
+    method: 'POST',
+    body: { name: 'Fornecedor da Loja A', document: '12345678000199' },
+  });
+  assert.equal(supplier.status, 201);
+
+  const before = db.prepare('SELECT stock, costPrice FROM products WHERE id = ?').get('product-a');
+  const purchase = await request('/api/purchases', {
+    token: tokenA,
+    method: 'POST',
+    body: {
+      supplierId: supplier.payload.id,
+      invoiceNumber: 'NF-100',
+      items: [{ productId: 'product-a', quantity: 3, unitCost: 5 }],
+    },
+  });
+  assert.equal(purchase.status, 201);
+  assert.equal(purchase.payload.status, 'draft');
+  assert.equal(purchase.payload.totalAmount, 15);
+
+  const foreignAccess = await request(`/api/purchases/${purchase.payload.id}`, { token: tokenB });
+  assert.equal(foreignAccess.status, 404);
+
+  const received = await request(`/api/purchases/${purchase.payload.id}/receive`, {
+    token: tokenA,
+    method: 'POST',
+  });
+  assert.equal(received.status, 200);
+  assert.equal(received.payload.status, 'received');
+
+  const afterReceipt = db.prepare('SELECT stock, costPrice FROM products WHERE id = ?').get('product-a');
+  const expectedCost = Math.round((((before.stock * before.costPrice) + 15) / (before.stock + 3)) * 100) / 100;
+  assert.equal(afterReceipt.stock, before.stock + 3);
+  assert.equal(afterReceipt.costPrice, expectedCost);
+
+  const repeated = await request(`/api/purchases/${purchase.payload.id}/receive`, {
+    token: tokenA,
+    method: 'POST',
+  });
+  assert.equal(repeated.status, 409);
+  assert.equal(db.prepare('SELECT stock FROM products WHERE id = ?').get('product-a').stock, before.stock + 3);
+
+  const cancelled = await request(`/api/purchases/${purchase.payload.id}/cancel`, {
+    token: tokenA,
+    method: 'POST',
+  });
+  assert.equal(cancelled.status, 200);
+  assert.equal(cancelled.payload.status, 'cancelled');
+  const afterCancel = db.prepare('SELECT stock, costPrice FROM products WHERE id = ?').get('product-a');
+  assert.equal(afterCancel.stock, before.stock);
+  assert.equal(afterCancel.costPrice, before.costPrice);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS count FROM stock_movements
+    WHERE referenceId = ? AND type IN ('purchase_receipt', 'purchase_reversal')
+  `).get(purchase.payload.id).count, 2);
+});
+
+test('bloqueia cancelamento de compra quando houve movimento posterior', async () => {
+  const supplier = db.prepare("SELECT id FROM suppliers WHERE establishmentId = 'est-a' LIMIT 1").get();
+  const purchase = await request('/api/purchases', {
+    token: tokenA,
+    method: 'POST',
+    body: {
+      supplierId: supplier.id,
+      items: [{ productId: 'product-a', quantity: 2, unitCost: 3 }],
+    },
+  });
+  assert.equal(purchase.status, 201);
+  assert.equal((await request(`/api/purchases/${purchase.payload.id}/receive`, { token: tokenA, method: 'POST' })).status, 200);
+  assert.equal((await request('/api/products/product-a/stock', {
+    token: tokenA,
+    method: 'PATCH',
+    body: { quantityStep: -1 },
+  })).status, 200);
+
+  const cancellation = await request(`/api/purchases/${purchase.payload.id}/cancel`, {
+    token: tokenA,
+    method: 'POST',
+  });
+  assert.equal(cancellation.status, 409);
+  assert.equal(cancellation.payload.code, 'purchase_has_later_movements');
+  assert.equal(db.prepare('SELECT status FROM purchases WHERE id = ?').get(purchase.payload.id).status, 'received');
 });
 
 test('cria estrutura inicial e permite excluir apenas conta ainda vazia', async () => {

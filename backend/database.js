@@ -198,6 +198,78 @@ const initDB = () => {
   `).run();
 
   db.prepare(`
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      legalName TEXT,
+      document TEXT,
+      email TEXT,
+      phone TEXT,
+      contactName TEXT,
+      notes TEXT,
+      active INTEGER DEFAULT 1,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS purchases (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      supplierId TEXT,
+      invoiceNumber TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      totalAmount REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      createdByUserId TEXT,
+      receivedAt TEXT,
+      cancelledAt TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id),
+      FOREIGN KEY (supplierId) REFERENCES suppliers(id) ON DELETE SET NULL
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS purchase_items (
+      id TEXT PRIMARY KEY,
+      purchaseId TEXT NOT NULL,
+      productId TEXT NOT NULL,
+      productName TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      unitCost REAL NOT NULL,
+      totalCost REAL NOT NULL,
+      previousCostPrice REAL,
+      appliedCostPrice REAL,
+      FOREIGN KEY (purchaseId) REFERENCES purchases(id) ON DELETE CASCADE
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id TEXT PRIMARY KEY,
+      establishmentId TEXT NOT NULL,
+      productId TEXT NOT NULL,
+      productName TEXT NOT NULL,
+      type TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      stockBefore INTEGER NOT NULL,
+      stockAfter INTEGER NOT NULL,
+      unitCost REAL,
+      referenceType TEXT,
+      referenceId TEXT,
+      notes TEXT,
+      userId TEXT,
+      createdAt TEXT NOT NULL,
+      FOREIGN KEY (establishmentId) REFERENCES establishments(id)
+    )
+  `).run();
+
+  db.prepare(`
     CREATE TABLE IF NOT EXISTS tenant_settings (
       establishmentId TEXT PRIMARY KEY,
       lowStockThreshold INTEGER NOT NULL DEFAULT 5,
@@ -386,6 +458,11 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_users_establishment ON users(establishmentId, isDeleted, role)',
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_scope ON users(COALESCE(establishmentId, '__platform__'), lower(username)) WHERE isDeleted = 0",
     'CREATE INDEX IF NOT EXISTS idx_products_establishment ON products(establishmentId, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_suppliers_establishment ON suppliers(establishmentId, active, name)',
+    'CREATE INDEX IF NOT EXISTS idx_purchases_establishment ON purchases(establishmentId, status, createdAt)',
+    'CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchaseId)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_movements_product ON stock_movements(establishmentId, productId, createdAt)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_movements_reference ON stock_movements(referenceType, referenceId, productId, type)',
     'CREATE INDEX IF NOT EXISTS idx_sales_establishment ON sales(establishmentId, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(saleId)',
     'CREATE INDEX IF NOT EXISTS idx_ai_suggestions_establishment ON ai_suggestions(establishmentId, updatedAt)',
@@ -439,6 +516,33 @@ const initDB = () => {
     db.prepare("UPDATE sales SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
     db.prepare("UPDATE ai_suggestions SET establishmentId = ? WHERE establishmentId IS NULL").run(DEFAULT_EST_ID);
   } catch (e) {}
+
+  // O saldo existente vira o marco inicial do razao de estoque. O indice
+  // unico torna esta migracao idempotente em todas as inicializacoes.
+  db.prepare(`
+    INSERT OR IGNORE INTO stock_movements (
+      id, establishmentId, productId, productName, type, quantity,
+      stockBefore, stockAfter, unitCost, referenceType, referenceId,
+      notes, userId, createdAt
+    )
+    SELECT
+      'initial-' || id,
+      establishmentId,
+      id,
+      name,
+      'initial_balance',
+      COALESCE(stock, 0),
+      0,
+      COALESCE(stock, 0),
+      COALESCE(costPrice, 0),
+      'product',
+      id,
+      'Saldo inicial migrado',
+      NULL,
+      COALESCE(createdAt, datetime('now'))
+    FROM products
+    WHERE establishmentId IS NOT NULL
+  `).run();
 
   // ============================================================
   // RENOMEAR USUÁRIO 'admin' PARA 'gestor' (migração de credencial)

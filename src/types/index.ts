@@ -295,6 +295,79 @@ export interface PaymentTransactionRecord {
   updatedAt: string;
 }
 
+export interface Supplier {
+  id: string;
+  establishmentId: string;
+  name: string;
+  legalName?: string | null;
+  document?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  contactName?: string | null;
+  notes?: string | null;
+  active: number;
+  purchaseCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PurchaseStatus = 'draft' | 'received' | 'cancelled';
+
+export interface PurchaseItem {
+  id: string;
+  purchaseId: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+  previousCostPrice?: number | null;
+  appliedCostPrice?: number | null;
+}
+
+export interface Purchase {
+  id: string;
+  establishmentId: string;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  invoiceNumber?: string | null;
+  status: PurchaseStatus;
+  totalAmount: number;
+  notes?: string | null;
+  itemCount?: number;
+  items?: PurchaseItem[];
+  createdByUserId?: string | null;
+  createdByName?: string | null;
+  receivedAt?: string | null;
+  cancelledAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockMovementType =
+  | 'initial_balance'
+  | 'purchase_receipt'
+  | 'purchase_reversal'
+  | 'sale'
+  | 'manual_adjustment';
+
+export interface StockMovement {
+  id: string;
+  establishmentId: string;
+  productId: string;
+  productName: string;
+  type: StockMovementType;
+  quantity: number;
+  stockBefore: number;
+  stockAfter: number;
+  unitCost?: number | null;
+  referenceType?: string | null;
+  referenceId?: string | null;
+  notes?: string | null;
+  userId?: string | null;
+  createdAt: string;
+}
+
 export interface PointTerminal {
   id: string;
   posId?: string;

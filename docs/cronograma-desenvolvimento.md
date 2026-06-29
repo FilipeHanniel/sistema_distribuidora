@@ -67,14 +67,15 @@ Objetivo: transformar o sistema em plataforma comercial para multiplos estabelec
 
 ## Fase 5 - Operacao do estabelecimento
 
-Status: proxima fase
+Status: em andamento
 
 Objetivo: melhorar o dia a dia do gestor e operador.
 
 - Refinar PDV para fluxo rapido com leitor de codigo de barras.
 - Melhorar cadastro rapido de produto com campos fiscais opcionais.
-- Criar compras/entrada de estoque.
-- Criar fornecedores.
+- Criar compras/entrada de estoque. Concluido em 28/06/2026 com rascunho, recebimento atomico, custo medio, cancelamento protegido e auditoria.
+- Criar fornecedores. Concluido em 28/06/2026 com cadastro, edicao, inativacao e isolamento por estabelecimento.
+- Criar razao de movimentacoes de estoque. Concluido em 28/06/2026 cobrindo saldo inicial, compras, reversoes, vendas e ajustes manuais.
 - Criar relatorios de estoque, margem e ruptura.
 - Melhorar relatorio de gestao com IA.
 - Criar central de notificacoes mais completa.
@@ -122,9 +123,9 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Criar fornecedores e o fluxo de compras/entrada de estoque.
-2. Refinar o PDV e o cadastro rapido de produtos para leitor de codigo de barras.
-3. Criar relatorios de estoque, margem e ruptura.
+1. Refinar o PDV e o cadastro rapido de produtos para leitor de codigo de barras.
+2. Criar relatorios de estoque, margem e ruptura usando o novo razao de movimentacoes.
+3. Melhorar o relatorio de gestao com IA e ampliar a central de notificacoes.
 4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
 5. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 
