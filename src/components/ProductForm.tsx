@@ -1,5 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import type { Product } from '../types';
+import './ProductForm.css';
 
 type ProductFormData = Omit<Product, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -12,7 +14,7 @@ interface ProductFormProps {
 const emptyFormData: ProductFormData = {
   barcode: '',
   name: '',
-  category: '',
+  category: 'Geral',
   costPrice: 0,
   sellPrice: 0,
   stock: 0,
@@ -47,6 +49,9 @@ function getInitialFormData(initialData?: Product | null): ProductFormData {
 
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
   const [formData, setFormData] = useState<ProductFormData>(() => getInitialFormData(initialData));
+  const [fiscalOpen, setFiscalOpen] = useState(() => Boolean(
+    initialData && (initialData.ncm || initialData.cfop || initialData.csosn || initialData.cst)
+  ));
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value, type } = e.target;
@@ -62,7 +67,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
   };
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} className="product-form">
       <div className="form-group">
         <label>Nome do Produto</label>
         <input
@@ -77,11 +82,10 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
         />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+      <div className="product-form-grid two-columns">
         <div className="form-group">
-          <label>Código de Barras</label>
+          <label>Código de Barras (opcional)</label>
           <input
-            required
             type="text"
             name="barcode"
             value={formData.barcode}
@@ -104,7 +108,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+      <div className="product-form-grid three-columns">
         <div className="form-group">
           <label>Custo (R$)</label>
           <input
@@ -146,9 +150,13 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
         </div>
       </div>
 
-      <div className="form-group">
-        <label>Dados fiscais para NFC-e</label>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '1rem' }}>
+      <button type="button" className="product-fiscal-toggle" onClick={() => setFiscalOpen(open => !open)} aria-expanded={fiscalOpen}>
+        <span><FileText size={17} /> Dados fiscais (opcional)</span>
+        {fiscalOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+      </button>
+
+      {fiscalOpen && <div className="product-fiscal-fields">
+        <div className="product-form-grid fiscal-columns">
           <input
             type="text"
             name="ncm"
@@ -182,9 +190,8 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
             placeholder="CST"
           />
         </div>
-      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+      <div className="product-form-grid three-columns">
         <div className="form-group">
           <label>Unidade fiscal</label>
           <input
@@ -220,6 +227,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           />
         </div>
       </div>
+      </div>}
 
       <div className="form-actions">
         <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancelar</button>

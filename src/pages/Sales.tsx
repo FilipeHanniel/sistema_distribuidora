@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect, useRef, type FormEvent } from 'react';
-import { Search, ShoppingCart, Plus, Minus, Trash2, CheckCircle, CreditCard, Banknote, QrCode, Scan, Tag, X } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, useCallback, type FormEvent } from 'react';
+import { Search, ShoppingCart, Plus, Minus, Trash2, CheckCircle, CreditCard, Banknote, QrCode, Scan, Tag, X, LoaderCircle } from 'lucide-react';
 import { useInventoryStore } from '../store/useInventoryStore';
 import { useSalesStore } from '../store/useSalesStore';
 import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
-import { apiRequest } from '../lib/api';
+import { apiRequest, getApiErrorMessage } from '../lib/api';
 import Modal from '../components/Modal';
 import type { CardTransaction, PixAccount, PixTransaction, Product, SaleItem } from '../types';
 import './Sales.css';
@@ -16,8 +16,11 @@ interface PaymentRuntimeConfig {
 export default function Sales() {
   const [searchTerm, setSearchTerm] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [barcodeError, setBarcodeError] = useState('');
+  const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [scanProcessing, setScanProcessing] = useState(false);
   const [quickProductOpen, setQuickProductOpen] = useState(false);
+  const [quickProductSaving, setQuickProductSaving] = useState(false);
+  const [quickProductError, setQuickProductError] = useState('');
   const [quickProduct, setQuickProduct] = useState({
     barcode: '',
     name: '',
@@ -48,8 +51,11 @@ export default function Sales() {
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const scannerBufferRef = useRef('');
+  const scannerLastKeyAtRef = useRef(0);
+  const feedbackTimerRef = useRef<number | null>(null);
 
-  const { products, addProduct } = useInventoryStore();
+  const { products, fetchProducts } = useInventoryStore();
   const lowStockThreshold = useSettingsStore(state => state.settings?.lowStockThreshold ?? DEFAULT_UI_SETTINGS.lowStockThreshold);
   const {
     addSale,
@@ -129,7 +135,7 @@ export default function Sales() {
     setCardInstallments(type === 'debit_card' ? 1 : Math.max(1, Math.min(12, Number(account.defaultInstallments || 1))));
   }, [availableCardAccounts, selectedCardAccountId]);
 
-  const addToCart = (product: Product) => {
+  const addToCart = useCallback((product: Product) => {
     if (product.stock <= 0) return;
     setCart((currentCart) => {
       const existingItem = currentCart.find(item => item.productId === product.id);
@@ -149,36 +155,100 @@ export default function Sales() {
         totalPrice: product.sellPrice
       }];
     });
-  };
+  }, []);
+
+  const showScanFeedback = useCallback((type: 'success' | 'error' | 'info', message: string) => {
+    if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
+    setScanFeedback({ type, message });
+    feedbackTimerRef.current = window.setTimeout(() => setScanFeedback(null), 3200);
+  }, []);
+
+  const processBarcode = useCallback(async (rawCode: string) => {
+    const code = rawCode.replace(/\s+/g, '').trim();
+    if (!code) return;
+    setBarcodeInput('');
+    setScanProcessing(true);
+    try {
+      const product = await apiRequest<Product>(`/products/by-barcode?barcode=${encodeURIComponent(code)}`);
+      const currentQuantity = cart.find(item => item.productId === product.id)?.quantity || 0;
+      if (product.stock <= 0) {
+        showScanFeedback('error', `"${product.name}" esta sem estoque.`);
+      } else if (currentQuantity >= product.stock) {
+        showScanFeedback('error', `Todo o estoque disponivel de "${product.name}" ja esta no carrinho.`);
+      } else {
+        addToCart(product);
+        showScanFeedback('success', `${product.name} adicionado ao carrinho.`);
+      }
+    } catch (err) {
+      const message = getApiErrorMessage(err, 'Nao foi possivel consultar o codigo de barras.');
+      if (message === 'Produto nao encontrado.') {
+        setQuickProductError('');
+        setQuickProduct({
+          barcode: code,
+          name: '',
+          costPrice: '',
+          sellPrice: '',
+          stock: '1',
+          category: 'Geral',
+        });
+        setQuickProductOpen(true);
+        showScanFeedback('info', `Codigo ${code} ainda nao cadastrado.`);
+      } else {
+        showScanFeedback('error', message);
+      }
+    } finally {
+      setScanProcessing(false);
+    }
+  }, [addToCart, cart, showScanFeedback]);
 
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
-    const code = barcodeInput.trim();
-    if (!code) return;
-
-    const product = products.find(p => p.barcode === code);
-    if (product) {
-      if (product.stock <= 0) {
-        setBarcodeError(`"${product.name}" sem estoque!`);
-      } else {
-        addToCart(product);
-        setBarcodeError('');
-      }
-    } else {
-      setBarcodeError(`Código "${code}" não encontrado.`);
-      setQuickProduct({
-        barcode: code,
-        name: '',
-        costPrice: '',
-        sellPrice: '',
-        stock: '1',
-        category: 'Geral',
-      });
-      setQuickProductOpen(true);
-    }
-    setBarcodeInput('');
-    setTimeout(() => setBarcodeError(''), 3000);
+    e.preventDefault();
+    void processBarcode(barcodeInput);
   };
+
+  useEffect(() => {
+    const handleGlobalScanner = (event: KeyboardEvent) => {
+      if (event.key === 'F2' && !quickProductOpen && !pixTransaction && !cardTransaction) {
+        event.preventDefault();
+        barcodeRef.current?.focus();
+        return;
+      }
+      if (event.key === 'F3' && !quickProductOpen && !pixTransaction && !cardTransaction) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (quickProductOpen || pixTransaction || cardTransaction || checkoutProcessing) return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return;
+
+      if (event.key === 'Enter') {
+        const code = scannerBufferRef.current;
+        scannerBufferRef.current = '';
+        if (code.length >= 3) {
+          event.preventDefault();
+          void processBarcode(code);
+        }
+        return;
+      }
+      if (event.key.length !== 1 || event.ctrlKey || event.altKey || event.metaKey) return;
+
+      const now = performance.now();
+      if (now - scannerLastKeyAtRef.current > 120) scannerBufferRef.current = '';
+      scannerLastKeyAtRef.current = now;
+      scannerBufferRef.current += event.key;
+    };
+
+    document.addEventListener('keydown', handleGlobalScanner);
+    return () => document.removeEventListener('keydown', handleGlobalScanner);
+  }, [cardTransaction, checkoutProcessing, pixTransaction, processBarcode, quickProductOpen]);
+
+  useEffect(() => () => {
+    if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
+  }, []);
 
   const updateQuantity = (productId: string, delta: number) => {
     const product = products.find(p => p.id === productId);
@@ -370,18 +440,41 @@ export default function Sales() {
 
   const handleQuickProductSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    await addProduct({
-      barcode: quickProduct.barcode,
-      name: quickProduct.name,
-      costPrice: Number(quickProduct.costPrice) || 0,
-      sellPrice: Number(quickProduct.sellPrice) || 0,
-      stock: Number(quickProduct.stock) || 0,
-      category: quickProduct.category || 'Geral',
-    });
+    setQuickProductSaving(true);
+    setQuickProductError('');
+    try {
+      const product = await apiRequest<Product>('/products/quick', {
+        method: 'POST',
+        body: {
+          barcode: quickProduct.barcode,
+          name: quickProduct.name,
+          costPrice: Number(quickProduct.costPrice) || 0,
+          sellPrice: Number(quickProduct.sellPrice),
+          stock: Number(quickProduct.stock) || 0,
+          category: quickProduct.category || 'Geral',
+        },
+      });
+      await fetchProducts();
+      if (product.stock > 0) {
+        addToCart(product);
+        showScanFeedback('success', `${product.name} cadastrado e adicionado ao carrinho.`);
+      } else {
+        showScanFeedback('info', `${product.name} cadastrado sem saldo de estoque.`);
+      }
+      setQuickProductOpen(false);
+      window.setTimeout(() => barcodeRef.current?.focus(), 0);
+    } catch (err) {
+      setQuickProductError(getApiErrorMessage(err, 'Nao foi possivel cadastrar o produto.'));
+    } finally {
+      setQuickProductSaving(false);
+    }
+  };
+
+  const closeQuickProduct = () => {
+    if (quickProductSaving) return;
     setQuickProductOpen(false);
-    setBarcodeError('Produto cadastrado. Escaneie novamente para adicionar ao carrinho.');
-    setTimeout(() => setBarcodeError(''), 3500);
-    barcodeRef.current?.focus();
+    setQuickProductError('');
+    window.setTimeout(() => barcodeRef.current?.focus(), 0);
   };
 
   const formatCurrency = (value: number) =>
@@ -397,7 +490,9 @@ export default function Sales() {
           {/* Scanner de Código de Barras */}
           <div className="barcode-scanner-area">
             <div className="barcode-input-wrapper">
-              <Scan size={18} className="barcode-icon" />
+              {scanProcessing
+                ? <LoaderCircle size={18} className="barcode-icon spin" />
+                : <Scan size={18} className="barcode-icon" />}
               <input
                 ref={barcodeRef}
                 type="text"
@@ -408,10 +503,12 @@ export default function Sales() {
                 onKeyDown={handleBarcodeScan}
                 autoFocus
               />
+              <span className="scanner-shortcut">F2</span>
             </div>
-            {barcodeError && (
-              <div className="barcode-error">
-                <X size={14} /> {barcodeError}
+            {scanFeedback && (
+              <div className={`barcode-feedback ${scanFeedback.type}`} role="status">
+                {scanFeedback.type === 'success' ? <CheckCircle size={14} /> : <X size={14} />}
+                {scanFeedback.message}
               </div>
             )}
           </div>
@@ -432,6 +529,7 @@ export default function Sales() {
                 <X size={16} />
               </button>
             )}
+            {!searchTerm && <span className="scanner-shortcut">F3</span>}
           </div>
 
           {/* Filtro de Categorias */}
@@ -782,8 +880,9 @@ export default function Sales() {
         )}
       </Modal>
 
-      <Modal isOpen={quickProductOpen} onClose={() => setQuickProductOpen(false)} title="Cadastro rapido de produto">
-        <form onSubmit={handleQuickProductSubmit}>
+      <Modal isOpen={quickProductOpen} onClose={closeQuickProduct} title="Cadastro rapido de produto">
+        <form onSubmit={handleQuickProductSubmit} className="quick-product-form">
+          {quickProductError && <div className="quick-product-error"><X size={15} /> {quickProductError}</div>}
           <div className="form-group">
             <label>Codigo de barras</label>
             <input className="form-control" value={quickProduct.barcode} onChange={e => setQuickProduct(p => ({ ...p, barcode: e.target.value }))} required />
@@ -809,12 +908,13 @@ export default function Sales() {
             </div>
             <div className="form-group">
               <label>Categoria</label>
-              <input className="form-control" value={quickProduct.category} onChange={e => setQuickProduct(p => ({ ...p, category: e.target.value }))} />
+              <input className="form-control" list="quick-product-categories" value={quickProduct.category} onChange={e => setQuickProduct(p => ({ ...p, category: e.target.value }))} />
+              <datalist id="quick-product-categories">{categories.filter(category => category !== 'Todos').map(category => <option value={category} key={category} />)}</datalist>
             </div>
           </div>
           <div className="form-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => setQuickProductOpen(false)}>Cancelar</button>
-            <button type="submit" className="btn btn-primary">Cadastrar Produto</button>
+            <button type="button" className="btn btn-secondary" onClick={closeQuickProduct} disabled={quickProductSaving}>Cancelar</button>
+            <button type="submit" className="btn btn-primary" disabled={quickProductSaving}>{quickProductSaving ? 'Cadastrando...' : 'Cadastrar e adicionar'}</button>
           </div>
         </form>
       </Modal>

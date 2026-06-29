@@ -87,6 +87,11 @@ const {
   normalizeSupplierPayload,
   receivePurchase,
 } = require('./inventoryService');
+const {
+  ProductPolicyError,
+  normalizeBarcode,
+  normalizeQuickProduct,
+} = require('./productPolicy');
 
 // ==============================
 // CONFIGURAÇÃO
@@ -2184,6 +2189,62 @@ app.get('/api/stock-movements', authenticateToken, isGestor, (req, res) => {
   }
 });
 
+const sendProductError = (res, err) => {
+  if (err instanceof ProductPolicyError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
+  }
+  if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    return res.status(409).json({ error: 'Este codigo de barras ja esta cadastrado neste estabelecimento.', code: 'duplicate_barcode' });
+  }
+  console.error('[Product Error]', err);
+  return res.status(500).json({ error: 'Nao foi possivel salvar o produto.' });
+};
+
+const ensureBarcodeAvailable = (establishmentId, barcode, excludeId = null) => {
+  if (!barcode) return;
+  const duplicate = db.prepare(`
+    SELECT id, name FROM products
+    WHERE establishmentId = ? AND barcode = ? AND (? IS NULL OR id != ?)
+  `).get(establishmentId, barcode, excludeId, excludeId);
+  if (duplicate) {
+    throw new ProductPolicyError(
+      `O codigo de barras ja pertence ao produto "${duplicate.name}".`,
+      409,
+      'duplicate_barcode'
+    );
+  }
+};
+
+const createProductRecord = ({ data, establishmentId, userId }) => {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO products (
+        id, barcode, name, costPrice, sellPrice, stock, category,
+        ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate,
+        establishmentId, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, data.barcode || '', data.name, data.costPrice, data.sellPrice, data.stock,
+      data.category || 'Geral', data.ncm || null, data.cfop || null,
+      data.csosn || null, data.cst || null, data.fiscalUnit || 'UN',
+      data.origin || '0', Number(data.taxRate || 0), establishmentId, now, now
+    );
+    db.prepare(`
+      INSERT INTO stock_movements (
+        id, establishmentId, productId, productName, type, quantity,
+        stockBefore, stockAfter, unitCost, referenceType, referenceId,
+        notes, userId, createdAt
+      ) VALUES (?, ?, ?, ?, 'initial_balance', ?, 0, ?, ?, 'product', ?, ?, ?, ?)
+    `).run(
+      `initial-${id}`, establishmentId, id, data.name, data.stock, data.stock,
+      Number(data.costPrice || 0), id, 'Saldo informado no cadastro', userId, now
+    );
+  })();
+  return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+};
+
 // ==============================
 // PRODUTOS
 // ==============================
@@ -2196,6 +2257,60 @@ app.get('/api/products', authenticateToken, (req, res) => {
   }
 });
 
+app.get('/api/products/by-barcode', authenticateToken, isTenantUser, (req, res) => {
+  try {
+    const barcode = normalizeBarcode(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Informe o codigo de barras.' });
+    const product = db.prepare('SELECT * FROM products WHERE establishmentId = ? AND barcode = ?')
+      .get(req.user.establishmentId, barcode);
+    if (!product) return res.status(404).json({ error: 'Produto nao encontrado.', code: 'product_not_found' });
+    res.json(product);
+  } catch (err) {
+    sendProductError(res, err);
+  }
+});
+
+app.post('/api/products/quick', authenticateToken, isTenantUser, requireOperationalSubscription, (req, res) => {
+  try {
+    const data = normalizeQuickProduct(req.body);
+    const estId = req.user.establishmentId;
+    ensureBarcodeAvailable(estId, data.barcode);
+    const usage = getTenantUsage(estId);
+    const establishment = ensureEstablishmentExists(estId);
+    const limitCheck = checkPlanLimit(establishment.plan, 'maxProducts', usage.products);
+    if (!limitCheck.allowed) {
+      const error = new ProductPolicyError(
+        `Limite do plano ${getPlanDefinition(establishment.plan).label} atingido.`,
+        403,
+        'plan_limit_reached'
+      );
+      error.planLimit = {
+        plan: normalizePlan(establishment.plan),
+        resource: 'maxProducts',
+        limit: limitCheck.limit,
+        currentCount: limitCheck.currentCount,
+        nextCount: limitCheck.nextCount,
+      };
+      throw error;
+    }
+    const product = createProductRecord({ data, establishmentId: estId, userId: req.user.id });
+    logAudit({
+      req,
+      establishmentId: estId,
+      action: 'product.quick_created',
+      entityType: 'product',
+      entityId: product.id,
+      metadata: { name: product.name, barcode: product.barcode, initialStock: product.stock },
+    });
+    res.status(201).json(product);
+  } catch (err) {
+    if (err instanceof ProductPolicyError && err.planLimit) {
+      return res.status(err.status).json({ error: err.message, code: err.code, planLimit: err.planLimit });
+    }
+    sendProductError(res, err);
+  }
+});
+
 app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
   const { barcode, name, costPrice, sellPrice, stock, category, ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate } = req.body;
   if (!name || costPrice == null || sellPrice == null) {
@@ -2205,13 +2320,20 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
   const now = new Date().toISOString();
   const estId = getTenantId(req);
   const initialStock = Number(stock || 0);
+  const normalizedCost = Number(costPrice);
+  const normalizedSell = Number(sellPrice);
   if (!Number.isInteger(initialStock) || initialStock < 0) {
     return res.status(400).json({ error: 'O estoque inicial deve ser um numero inteiro maior ou igual a zero.' });
+  }
+  if (!Number.isFinite(normalizedCost) || normalizedCost < 0 || !Number.isFinite(normalizedSell) || normalizedSell < 0) {
+    return res.status(400).json({ error: 'Os precos de custo e venda devem ser validos.' });
   }
   if (!estId || !ensureEstablishmentExists(estId)) {
     return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
   }
   try {
+    const normalizedBarcode = normalizeBarcode(barcode);
+    ensureBarcodeAvailable(estId, normalizedBarcode);
     const usage = getTenantUsage(estId);
     const establishment = ensureEstablishmentExists(estId);
     const limitCheck = checkPlanLimit(establishment.plan, 'maxProducts', usage.products);
@@ -2236,7 +2358,7 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
           establishmentId, createdAt, updatedAt
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        id, barcode || '', name, costPrice, sellPrice, initialStock, category || 'Geral',
+        id, normalizedBarcode, String(name).trim(), normalizedCost, normalizedSell, initialStock, category || 'Geral',
         ncm || null, cfop || null, csosn || null, cst || null, fiscalUnit || 'UN', origin || '0', Number(taxRate || 0),
         estId, now, now
       );
@@ -2261,7 +2383,7 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
     });
     res.status(201).json({ id, message: 'Produto inserido com sucesso!' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendProductError(res, err);
   }
 });
 
@@ -2276,6 +2398,10 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperatio
       ? db.prepare('SELECT * FROM products WHERE id = ? AND establishmentId = ?').get(id, access.establishmentId)
       : null;
     if (!product) return res.status(404).json({ error: 'Produto nao encontrado ou sem permissao.' });
+    if (updates.barcode !== undefined) {
+      updates.barcode = normalizeBarcode(updates.barcode);
+      ensureBarcodeAvailable(product.establishmentId, updates.barcode, id);
+    }
     if (updates.stock !== undefined) {
       const requestedStock = Number(updates.stock);
       if (!Number.isInteger(requestedStock) || requestedStock < 0) {
@@ -2323,7 +2449,7 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperatio
     });
     res.json({ message: 'Produto atualizado com sucesso!' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendProductError(res, err);
   }
 });
 

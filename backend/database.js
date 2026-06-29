@@ -458,6 +458,7 @@ const initDB = () => {
     'CREATE INDEX IF NOT EXISTS idx_users_establishment ON users(establishmentId, isDeleted, role)',
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_scope ON users(COALESCE(establishmentId, '__platform__'), lower(username)) WHERE isDeleted = 0",
     'CREATE INDEX IF NOT EXISTS idx_products_establishment ON products(establishmentId, createdAt)',
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode_scope ON products(establishmentId, barcode) WHERE length(trim(COALESCE(barcode, ''))) > 0",
     'CREATE INDEX IF NOT EXISTS idx_suppliers_establishment ON suppliers(establishmentId, active, name)',
     'CREATE INDEX IF NOT EXISTS idx_purchases_establishment ON purchases(establishmentId, status, createdAt)',
     'CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchaseId)',

@@ -1,0 +1,46 @@
+.product-form-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.product-form-grid.two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.product-form-grid.three-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.product-form-grid.fiscal-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.product-fiscal-toggle {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: 0 .75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.product-fiscal-toggle span { display: inline-flex; align-items: center; gap: .45rem; }
+.product-fiscal-toggle:hover { border-color: var(--primary); color: var(--primary); }
+
+.product-fiscal-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-top: 0;
+}
+
+.product-fiscal-fields .form-group { margin-bottom: 0; }
+
+@media (max-width: 680px) {
+  .product-form-grid.two-columns,
+  .product-form-grid.three-columns,
+  .product-form-grid.fiscal-columns { grid-template-columns: 1fr; }
+}

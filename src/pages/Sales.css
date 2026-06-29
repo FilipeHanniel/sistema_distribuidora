@@ -44,7 +44,7 @@
 
 .barcode-input {
   width: 100%;
-  padding: 0.7rem 1rem 0.7rem 2.5rem;
+  padding: 0.7rem 3rem 0.7rem 2.5rem;
   border: 2px solid var(--primary);
   border-radius: var(--radius);
   background-color: var(--primary-light);
@@ -64,15 +64,38 @@
   box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.2);
 }
 
-.barcode-error {
+.barcode-feedback {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.8rem;
-  color: var(--secondary);
   font-weight: 500;
-  padding: 0 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border-left: 3px solid currentColor;
+  background: var(--bg-main);
   animation: fadeIn 0.2s ease;
+}
+
+.barcode-feedback.success { color: #15803d; }
+.barcode-feedback.error { color: #dc2626; }
+.barcode-feedback.info { color: #0369a1; }
+
+.scanner-shortcut {
+  position: absolute;
+  right: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.8rem;
+  height: 1.35rem;
+  padding: 0 0.28rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  font-weight: 800;
+  pointer-events: none;
 }
 
 @keyframes fadeIn {
@@ -545,6 +568,18 @@
 
 .payment-btn.active svg {
   transform: scale(1.1);
+}
+
+.quick-product-error {
+  display: flex;
+  align-items: flex-start;
+  gap: .45rem;
+  padding: .65rem .75rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(220, 38, 38, .25);
+  background: rgba(220, 38, 38, .07);
+  color: #dc2626;
+  font-size: .8rem;
 }
 
 .pix-account-select {

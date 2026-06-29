@@ -257,6 +257,58 @@ test('restringe rotas administrativas e permite acesso controlado ao SuperAdmin'
   assert.ok(productsB.payload.every(item => item.establishmentId === 'est-b'));
 });
 
+test('permite cadastro rapido pelo operador e restringe codigo duplicado ao tenant', async () => {
+  const operatorLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'caixa', password: 'caixa-a-123' },
+  });
+  assert.equal(operatorLogin.status, 200);
+
+  const createdA = await request('/api/products/quick', {
+    token: operatorLogin.payload.token,
+    method: 'POST',
+    body: {
+      barcode: ' QUICK-001 ',
+      name: 'Produto de balcao',
+      costPrice: 2,
+      sellPrice: 4.5,
+      stock: 5,
+      category: 'Balcao',
+    },
+  });
+  assert.equal(createdA.status, 201);
+  assert.equal(createdA.payload.barcode, 'QUICK-001');
+  assert.equal(createdA.payload.establishmentId, 'est-a');
+
+  const lookup = await request('/api/products/by-barcode?barcode=QUICK-001', {
+    token: operatorLogin.payload.token,
+  });
+  assert.equal(lookup.status, 200);
+  assert.equal(lookup.payload.id, createdA.payload.id);
+
+  const duplicate = await request('/api/products/quick', {
+    token: tokenA,
+    method: 'POST',
+    body: { barcode: 'QUICK-001', name: 'Duplicado', sellPrice: 3, stock: 1 },
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.payload.code, 'duplicate_barcode');
+
+  const createdB = await request('/api/products/quick', {
+    token: tokenB,
+    method: 'POST',
+    body: { barcode: 'QUICK-001', name: 'Produto da Loja B', sellPrice: 3, stock: 1 },
+  });
+  assert.equal(createdB.status, 201);
+  assert.equal(createdB.payload.establishmentId, 'est-b');
+
+  const audit = db.prepare(`
+    SELECT actorUserId FROM audit_logs
+    WHERE action = 'product.quick_created' AND entityId = ?
+  `).get(createdA.payload.id);
+  assert.equal(audit.actorUserId, 'operador-a');
+});
+
 test('automatiza atraso, suspensao, notificacoes e reativacao por pagamento', async () => {
   const afterGrace = new Date();
   const overdueDate = new Date(afterGrace);
