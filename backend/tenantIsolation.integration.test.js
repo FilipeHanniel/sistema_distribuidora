@@ -466,6 +466,26 @@ test('bloqueia cancelamento de compra quando houve movimento posterior', async (
   assert.equal(db.prepare('SELECT status FROM purchases WHERE id = ?').get(purchase.payload.id).status, 'received');
 });
 
+test('gera relatorio operacional isolado por estabelecimento', async () => {
+  const reportA = await request('/api/reports/inventory?periodDays=30&ruptureRiskDays=15&salesWindowDays=90', {
+    token: tokenA,
+  });
+  const reportB = await request('/api/reports/inventory?periodDays=30&ruptureRiskDays=15&salesWindowDays=90', {
+    token: tokenB,
+  });
+  const blocked = await request('/api/reports/inventory', { token: superToken });
+
+  assert.equal(reportA.status, 200);
+  assert.equal(reportB.status, 200);
+  assert.equal(blocked.status, 403);
+  assert.ok(reportA.payload.summary.productCount >= 1);
+  assert.ok(reportA.payload.summary.revenue >= 2);
+  assert.ok(reportA.payload.marginByProduct.some(item => item.productId === 'product-a'));
+  assert.equal(reportA.payload.marginByProduct.some(item => item.productId === 'product-b'), false);
+  assert.ok(reportB.payload.marginByProduct.some(item => item.productId === 'product-b'));
+  assert.equal(reportB.payload.marginByProduct.some(item => item.productId === 'product-a'), false);
+});
+
 test('cria estrutura inicial e permite excluir apenas conta ainda vazia', async () => {
   const created = await request('/api/admin/establishments', {
     token: superToken,

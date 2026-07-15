@@ -368,6 +368,115 @@ export interface StockMovement {
   createdAt: string;
 }
 
+export interface InventoryReportSummary {
+  productCount: number;
+  inventoryUnits: number;
+  inventoryCostValue: number;
+  inventoryRetailValue: number;
+  potentialGrossMargin: number;
+  outOfStockCount: number;
+  lowStockCount: number;
+  ruptureRiskCount: number;
+  stagnantCount: number;
+  salesCount: number;
+  revenue: number;
+  unitsSold: number;
+  averageTicket: number;
+  estimatedCost: number;
+  grossProfit: number;
+  grossMarginPct: number;
+}
+
+export interface InventoryReportPeriod {
+  days: number;
+  start: string;
+  end: string;
+}
+
+export interface InventoryReportSettings {
+  lowStockThreshold: number;
+  ruptureRiskDays: number;
+  salesWindowDays: number;
+}
+
+export interface InventoryReportTrendPoint {
+  date: string;
+  revenue: number;
+  salesCount: number;
+  unitsSold: number;
+}
+
+export interface InventoryReportCategory {
+  category: string;
+  productCount: number;
+  stockUnits: number;
+  inventoryCostValue: number;
+  inventoryRetailValue: number;
+  quantitySold: number;
+  revenue: number;
+  grossProfit: number;
+}
+
+export interface InventoryReportProductMargin {
+  productId: string;
+  name: string;
+  category: string;
+  quantitySold: number;
+  revenue: number;
+  estimatedCost: number;
+  grossProfit: number;
+  grossMarginPct: number;
+  currentStock: number;
+  currentCostPrice: number;
+  currentSellPrice: number;
+}
+
+export type RuptureRiskLevel = 'out' | 'critical' | 'attention' | 'monitor';
+
+export interface InventoryReportProductAlert {
+  productId: string;
+  name: string;
+  category: string;
+  currentStock: number;
+  costPrice: number;
+  sellPrice: number;
+  inventoryCostValue: number;
+  inventoryRetailValue: number;
+  soldLastWindow: number;
+  revenueLastWindow: number;
+  lastSaleAt?: string | null;
+}
+
+export interface InventoryReportRuptureRisk extends InventoryReportProductAlert {
+  dailyAverage: number;
+  daysCover: number;
+  riskLevel: RuptureRiskLevel;
+  suggestedRestock: number;
+}
+
+export interface InventoryReportMovementSummary {
+  type: StockMovementType;
+  movementCount: number;
+  quantityIn: number;
+  quantityOut: number;
+  netQuantity: number;
+  estimatedValue: number;
+}
+
+export interface InventoryReport {
+  generatedAt: string;
+  period: InventoryReportPeriod;
+  settings: InventoryReportSettings;
+  summary: InventoryReportSummary;
+  salesTrend: InventoryReportTrendPoint[];
+  categoryBreakdown: InventoryReportCategory[];
+  marginByProduct: InventoryReportProductMargin[];
+  lowStockProducts: InventoryReportProductAlert[];
+  ruptureRisks: InventoryReportRuptureRisk[];
+  stagnantProducts: InventoryReportProductAlert[];
+  movementSummary: InventoryReportMovementSummary[];
+}
+
 export interface PointTerminal {
   id: string;
   posId?: string;

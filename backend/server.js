@@ -87,6 +87,7 @@ const {
   normalizeSupplierPayload,
   receivePurchase,
 } = require('./inventoryService');
+const { buildInventoryReport } = require('./inventoryReportService');
 const {
   ProductPolicyError,
   normalizeBarcode,
@@ -2186,6 +2187,20 @@ app.get('/api/stock-movements', authenticateToken, isGestor, (req, res) => {
     res.json(rows);
   } catch (err) {
     sendInventoryError(res, err);
+  }
+});
+
+app.get('/api/reports/inventory', authenticateToken, isGestor, (req, res) => {
+  try {
+    const report = buildInventoryReport(db, req.user.establishmentId, {
+      periodDays: req.query.periodDays,
+      salesWindowDays: req.query.salesWindowDays,
+      ruptureRiskDays: req.query.ruptureRiskDays,
+    });
+    res.json(report);
+  } catch (err) {
+    console.error('[Inventory Report Error]', err);
+    res.status(500).json({ error: 'Nao foi possivel gerar o relatorio de estoque.' });
   }
 });
 

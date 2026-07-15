@@ -76,7 +76,7 @@ Objetivo: melhorar o dia a dia do gestor e operador.
 - Criar compras/entrada de estoque. Concluido em 28/06/2026 com rascunho, recebimento atomico, custo medio, cancelamento protegido e auditoria.
 - Criar fornecedores. Concluido em 28/06/2026 com cadastro, edicao, inativacao e isolamento por estabelecimento.
 - Criar razao de movimentacoes de estoque. Concluido em 28/06/2026 cobrindo saldo inicial, compras, reversoes, vendas e ajustes manuais.
-- Criar relatorios de estoque, margem e ruptura.
+- Criar relatorios de estoque, margem e ruptura. Concluido em 14/07/2026 com calculo backend por estabelecimento, margem por produto, curva de faturamento, produtos parados, estoque baixo ativo e risco de ruptura por saida dos ultimos 90 dias.
 - Melhorar relatorio de gestao com IA.
 - Criar central de notificacoes mais completa.
 
@@ -123,10 +123,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Criar relatorios de estoque, margem e ruptura usando o novo razao de movimentacoes.
-2. Melhorar o relatorio de gestao com IA e ampliar a central de notificacoes.
-3. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-4. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-5. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
+1. Melhorar o relatorio de gestao com IA e ampliar a central de notificacoes.
+2. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
+3. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
