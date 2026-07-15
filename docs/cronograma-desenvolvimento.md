@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 28/06/2026
+Atualizado em: 14/07/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -78,7 +78,13 @@ Objetivo: melhorar o dia a dia do gestor e operador.
 - Criar razao de movimentacoes de estoque. Concluido em 28/06/2026 cobrindo saldo inicial, compras, reversoes, vendas e ajustes manuais.
 - Criar relatorios de estoque, margem e ruptura. Concluido em 14/07/2026 com calculo backend por estabelecimento, margem por produto, curva de faturamento, produtos parados, estoque baixo ativo e risco de ruptura por saida dos ultimos 90 dias.
 - Melhorar relatorio de gestao com IA.
-- Criar central de notificacoes mais completa.
+  - Fazer a IA usar dados de estoque, margem, ruptura, produtos parados, vendas e movimentacoes.
+  - Padronizar blocos: resumo executivo, pontos positivos, pontos de atencao, acoes recomendadas e observacoes.
+  - Inserir atalhos do relatorio para os relatorios operacionais.
+- Criar central de notificacoes mais completa. Concluido em 14/07/2026 com sincronizacao operacional automatica, alertas de ruptura, estoque baixo, produtos parados, compra recebida, pagamento pendente/erro, falha fiscal, venda sem NF autorizada e leitura visual por tipo.
+  - Gerar alertas para risco de ruptura, produtos parados e estoque baixo ativo.
+  - Notificar compra recebida, falha fiscal, venda sem NF autorizada, pagamento pendente/erro e vencimento de assinatura.
+  - Melhorar a leitura visual da central por tipo, referencia e horario.
 
 ## Fase 6 - Seguranca e conformidade
 
@@ -123,7 +129,7 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Melhorar o relatorio de gestao com IA e ampliar a central de notificacoes.
+1. Melhorar o relatorio de gestao com IA usando os dados operacionais.
 2. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
 3. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 

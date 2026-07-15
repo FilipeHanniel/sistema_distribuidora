@@ -486,6 +486,67 @@ test('gera relatorio operacional isolado por estabelecimento', async () => {
   assert.equal(reportB.payload.marginByProduct.some(item => item.productId === 'product-a'), false);
 });
 
+test('gera notificacoes operacionais por estabelecimento sem duplicar no refresh', async () => {
+  const alertNow = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO products (
+      id, barcode, name, costPrice, sellPrice, stock, category, establishmentId, createdAt, updatedAt
+    ) VALUES ('notify-product-a', 'N001', 'Produto em Risco', 5, 10, 1, 'Alertas', 'est-a', ?, ?)
+  `).run(alertNow, alertNow);
+  db.prepare(`
+    INSERT INTO sales (id, totalAmount, paymentMethod, fiscalStatus, userId, establishmentId, createdAt)
+    VALUES ('notify-sale-a', 80, 'money', 'rejected', 'gestor-a', 'est-a', ?)
+  `).run(alertNow);
+  db.prepare(`
+    INSERT INTO sale_items (saleId, productId, name, quantity, unitPrice, totalPrice)
+    VALUES ('notify-sale-a', 'notify-product-a', 'Produto em Risco', 8, 10, 80)
+  `).run();
+  db.prepare(`
+    INSERT INTO stock_movements (
+      id, establishmentId, productId, productName, type, quantity,
+      stockBefore, stockAfter, unitCost, referenceType, referenceId, notes, userId, createdAt
+    ) VALUES ('notify-movement-a', 'est-a', 'notify-product-a', 'Produto em Risco', 'sale', -8, 9, 1, 5, 'sale', 'notify-sale-a', 'Venda de teste', 'gestor-a', ?)
+  `).run(alertNow);
+  db.prepare(`
+    INSERT INTO payment_transactions (
+      id, establishmentId, pixAccountId, provider, status, amount, paymentMethod, error, createdAt, updatedAt
+    ) VALUES ('notify-payment-a', 'est-a', 'account-a', 'fake', 'error', 80, 'pix', 'Falha simulada', ?, ?)
+  `).run(alertNow, alertNow);
+  db.prepare(`
+    INSERT OR REPLACE INTO fiscal_settings (establishmentId, enabled, createdAt, updatedAt)
+    VALUES ('est-a', 1, ?, ?)
+  `).run(alertNow, alertNow);
+  db.prepare(`
+    INSERT INTO fiscal_documents (
+      id, establishmentId, saleId, model, status, error, createdAt, updatedAt
+    ) VALUES ('notify-doc-a', 'est-a', 'notify-sale-a', '65', 'rejected', 'Rejeicao simulada', ?, ?)
+  `).run(alertNow, alertNow);
+
+  const firstLoad = await request('/api/notifications', { token: tokenA });
+  assert.equal(firstLoad.status, 200);
+  const types = new Set(firstLoad.payload.map(item => item.type));
+  assert.ok(types.has('inventory_rupture_risk'));
+  assert.ok(types.has('payment_error'));
+  assert.ok(types.has('fiscal_rejected'));
+  assert.equal(firstLoad.payload.some(item => item.referenceId === 'notify-product-b'), false);
+
+  const beforeSecondLoad = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM notifications
+    WHERE establishmentId = 'est-a'
+      AND type IN ('inventory_rupture_risk', 'payment_error', 'fiscal_rejected')
+  `).get().count;
+  const secondLoad = await request('/api/notifications', { token: tokenA });
+  assert.equal(secondLoad.status, 200);
+  const afterSecondLoad = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM notifications
+    WHERE establishmentId = 'est-a'
+      AND type IN ('inventory_rupture_risk', 'payment_error', 'fiscal_rejected')
+  `).get().count;
+  assert.equal(afterSecondLoad, beforeSecondLoad);
+});
+
 test('cria estrutura inicial e permite excluir apenas conta ainda vazia', async () => {
   const created = await request('/api/admin/establishments', {
     token: superToken,

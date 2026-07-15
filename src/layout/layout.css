@@ -328,6 +328,12 @@
   font-size: 0.9rem;
 }
 
+.notifications-header > div {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+
 .notifications-header button {
   border: 0;
   background: transparent;
@@ -359,22 +365,64 @@
   background: rgba(var(--primary-rgb), 0.06);
 }
 
+.notification-item-top,
 .notification-item span,
-.notification-item small {
+.notification-item small,
+.notification-item em {
   display: block;
 }
 
-.notification-item span {
+.notification-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  margin-bottom: .35rem;
+}
+
+.notification-type {
+  display: inline-flex !important;
+  width: fit-content;
+  min-height: 20px;
+  align-items: center;
+  padding: 0 .45rem;
+  border-radius: 999px;
+  font-size: .62rem !important;
+  font-weight: 850 !important;
+  text-transform: uppercase;
+}
+
+.notification-type.stock { color: #0f766e; background: rgba(15, 118, 110, .1); }
+.notification-type.payment { color: #005CB9; background: rgba(0, 92, 185, .1); }
+.notification-type.fiscal { color: #7c3aed; background: rgba(124, 58, 237, .1); }
+.notification-type.purchase { color: #b45309; background: rgba(180, 83, 9, .1); }
+.notification-type.platform { color: #b91c1c; background: rgba(185, 28, 28, .1); }
+.notification-type.ai { color: #6d28d9; background: rgba(109, 40, 217, .1); }
+.notification-type.default { color: var(--text-secondary); background: var(--bg-main); }
+
+.notification-title {
   color: var(--text-primary);
   font-size: 0.85rem;
   font-weight: 800;
   margin-bottom: 0.2rem;
 }
 
-.notification-item small,
+.notification-message,
 .notification-empty {
   color: var(--text-secondary);
   font-size: 0.78rem;
+}
+
+.notification-reference {
+  width: fit-content;
+  margin-top: .45rem;
+  padding: .15rem .42rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: .66rem;
+  font-style: normal;
+  font-weight: 750;
 }
 
 .notification-empty {

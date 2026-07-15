@@ -1350,6 +1350,147 @@ const createNotification = ({ establishmentId, userId = null, audience = 'gestor
   return id;
 };
 
+const formatMoneyBrief = value => `R$ ${Number(value || 0).toFixed(2).replace('.', ',')}`;
+const minutesAgoIso = (now, minutes) => new Date(now.getTime() - minutes * 60 * 1000).toISOString();
+
+const syncOperationalNotifications = ({ establishmentId, now = new Date() } = {}) => {
+  if (!establishmentId) return { synced: false, reason: 'missing_establishment' };
+
+  const todayKey = now.toISOString().slice(0, 10);
+  const report = buildInventoryReport(db, establishmentId, {
+    now,
+    periodDays: 30,
+    salesWindowDays: 90,
+    ruptureRiskDays: 15,
+  });
+
+  const ruptureProductIds = new Set();
+  for (const item of report.ruptureRisks.slice(0, 5)) {
+    ruptureProductIds.add(item.productId);
+    createNotification({
+      establishmentId,
+      audience: 'gestor',
+      type: 'inventory_rupture_risk',
+      title: 'Risco de ruptura de estoque',
+      message: `${item.name} tem ${item.currentStock} un. e cobertura aproximada de ${item.daysCover} dia(s). Sugestao: repor ${item.suggestedRestock} un.`,
+      referenceType: 'product',
+      referenceId: `${todayKey}:rupture:${item.productId}`,
+    });
+  }
+
+  for (const item of report.lowStockProducts.filter(product => !ruptureProductIds.has(product.productId)).slice(0, 5)) {
+    createNotification({
+      establishmentId,
+      audience: 'gestor',
+      type: 'inventory_low_stock',
+      title: 'Produto com estoque baixo',
+      message: `${item.name} esta com ${item.currentStock} un. e teve ${item.soldLastWindow} venda(s) nos ultimos 90 dias.`,
+      referenceType: 'product',
+      referenceId: `${todayKey}:low-stock:${item.productId}`,
+    });
+  }
+
+  for (const item of report.stagnantProducts.slice(0, 5)) {
+    createNotification({
+      establishmentId,
+      audience: 'gestor',
+      type: 'inventory_stagnant',
+      title: 'Produto parado em estoque',
+      message: `${item.name} tem ${item.currentStock} un. sem venda nos ultimos 90 dias. Capital parado: ${formatMoneyBrief(item.inventoryCostValue)}.`,
+      referenceType: 'product',
+      referenceId: `${todayKey}:stagnant:${item.productId}`,
+    });
+  }
+
+  const pendingThreshold = minutesAgoIso(now, 15);
+  const paymentAlerts = db.prepare(`
+    SELECT id, status, amount, paymentMethod, provider, error, createdAt, expiresAt
+    FROM payment_transactions
+    WHERE establishmentId = ?
+      AND (
+        status = 'error'
+        OR error IS NOT NULL
+        OR (status = 'pending' AND createdAt <= ?)
+      )
+    ORDER BY createdAt DESC
+    LIMIT 20
+  `).all(establishmentId, pendingThreshold);
+  for (const transaction of paymentAlerts) {
+    const isError = transaction.status === 'error' || Boolean(transaction.error);
+    createNotification({
+      establishmentId,
+      audience: 'gestor',
+      type: isError ? 'payment_error' : 'payment_pending',
+      title: isError ? 'Pagamento com erro' : 'Pagamento pendente',
+      message: isError
+        ? `Uma transacao de ${formatMoneyBrief(transaction.amount)} falhou: ${transaction.error || 'erro do provedor'}.`
+        : `Uma transacao de ${formatMoneyBrief(transaction.amount)} continua pendente. Verifique a conciliacao.`,
+      referenceType: 'payment_transaction',
+      referenceId: transaction.id,
+    });
+  }
+
+  const fiscalSettings = db.prepare('SELECT enabled FROM fiscal_settings WHERE establishmentId = ?').get(establishmentId);
+  if (Number(fiscalSettings?.enabled || 0) === 1) {
+    const fiscalPendingThreshold = minutesAgoIso(now, 10);
+    const documents = db.prepare(`
+      SELECT fd.id, fd.saleId, fd.status, fd.error, s.totalAmount
+      FROM fiscal_documents fd
+      LEFT JOIN sales s ON s.id = fd.saleId AND s.establishmentId = fd.establishmentId
+      WHERE fd.establishmentId = ?
+        AND (
+          fd.status = 'rejected'
+          OR (fd.status IN ('pending_authorization', 'pending_configuration') AND fd.createdAt <= ?)
+        )
+      ORDER BY fd.createdAt DESC
+      LIMIT 20
+    `).all(establishmentId, fiscalPendingThreshold);
+    for (const document of documents) {
+      const rejected = document.status === 'rejected';
+      createNotification({
+        establishmentId,
+        audience: 'gestor',
+        type: rejected ? 'fiscal_rejected' : 'fiscal_pending',
+        title: rejected ? 'NF rejeitada' : 'NF pendente',
+        message: rejected
+          ? `A NF da venda ${document.saleId} foi rejeitada: ${document.error || 'verifique os dados fiscais'}.`
+          : `A venda ${document.saleId} ainda nao possui NF autorizada.`,
+        referenceType: rejected ? 'fiscal_document' : 'sale',
+        referenceId: rejected ? document.id : document.saleId,
+      });
+    }
+
+    const salesWithoutAuthorizedInvoice = db.prepare(`
+      SELECT s.id, s.totalAmount, s.fiscalStatus, s.createdAt
+      FROM sales s
+      WHERE s.establishmentId = ?
+        AND s.createdAt <= ?
+        AND COALESCE(s.fiscalStatus, '') NOT IN ('authorized', 'not_required')
+        AND NOT EXISTS (
+          SELECT 1 FROM fiscal_documents fd
+          WHERE fd.establishmentId = s.establishmentId
+            AND fd.saleId = s.id
+            AND fd.status = 'authorized'
+        )
+      ORDER BY s.createdAt DESC
+      LIMIT 20
+    `).all(establishmentId, fiscalPendingThreshold);
+    for (const sale of salesWithoutAuthorizedInvoice) {
+      createNotification({
+        establishmentId,
+        audience: 'gestor',
+        type: 'fiscal_sale_without_authorization',
+        title: 'Venda sem NF autorizada',
+        message: `A venda ${sale.id} (${formatMoneyBrief(sale.totalAmount)}) ainda nao tem autorizacao fiscal.`,
+        referenceType: 'sale',
+        referenceId: sale.id,
+      });
+    }
+  }
+
+  return { synced: true };
+};
+
 const reconcileSubscriptions = ({ now = new Date() } = {}) => {
   const establishments = db.prepare('SELECT * FROM establishments').all();
   const summary = { checked: establishments.length, changed: 0, active: 0, overdue: 0, suspended: 0 };
@@ -2115,6 +2256,15 @@ app.post('/api/purchases/:id/receive', authenticateToken, isGestor, requireOpera
       entityType: 'purchase',
       entityId: purchase.id,
       metadata: { totalAmount: purchase.totalAmount, itemCount: purchase.items.length },
+    });
+    createNotification({
+      establishmentId: req.user.establishmentId,
+      audience: 'gestor',
+      type: 'purchase_received',
+      title: 'Compra recebida',
+      message: `Entrada de estoque confirmada com ${purchase.items.length} item(ns), total de ${formatMoneyBrief(purchase.totalAmount)}.`,
+      referenceType: 'purchase',
+      referenceId: purchase.id,
     });
     res.json(purchase);
   } catch (err) {
@@ -2892,6 +3042,7 @@ app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => 
     if (req.user.role === 'superadmin') {
       return res.json([]);
     }
+    syncOperationalNotifications({ establishmentId: req.user.establishmentId });
     const notifications = db.prepare(`
       SELECT *
       FROM notifications
@@ -2904,6 +3055,17 @@ app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => 
     res.json(notifications);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/sync', authenticateToken, isGestorOrAbove, (req, res) => {
+  try {
+    if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
+    const result = syncOperationalNotifications({ establishmentId: req.user.establishmentId });
+    res.json(result);
+  } catch (err) {
+    console.error('[Notification Sync Error]', err.message);
+    res.status(500).json({ error: 'Nao foi possivel atualizar as notificacoes.' });
   }
 });
 

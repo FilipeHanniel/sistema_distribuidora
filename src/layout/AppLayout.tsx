@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, PackagePlus, ShoppingCart, BarChart3, Users as UsersIcon,
   Sun, Moon, LogOut, KeyRound, ClipboardList, ChevronDown, Menu, X,
   Building2, Crown, CreditCard, Bell, CheckCheck, FileText, WalletCards, SlidersHorizontal,
-  AlertTriangle, ShieldX
+  AlertTriangle, ShieldX, RefreshCw
 } from 'lucide-react';
 import './layout.css';
 
@@ -53,6 +53,50 @@ function TopbarTitle() {
   const title = PAGE_TITLES[location.pathname] || 'Distribuidora';
   return <span className="topbar-page-title">{title}</span>;
 }
+
+const notificationLabels: Record<string, { label: string; tone: 'stock' | 'payment' | 'fiscal' | 'purchase' | 'platform' | 'ai' | 'default' }> = {
+  inventory_rupture_risk: { label: 'Estoque', tone: 'stock' },
+  inventory_low_stock: { label: 'Estoque', tone: 'stock' },
+  inventory_stagnant: { label: 'Estoque', tone: 'stock' },
+  purchase_received: { label: 'Compra', tone: 'purchase' },
+  payment_error: { label: 'Pagamento', tone: 'payment' },
+  payment_pending: { label: 'Pagamento', tone: 'payment' },
+  fiscal_rejected: { label: 'Fiscal', tone: 'fiscal' },
+  fiscal_pending: { label: 'Fiscal', tone: 'fiscal' },
+  fiscal_sale_without_authorization: { label: 'Fiscal', tone: 'fiscal' },
+  subscription_due_soon: { label: 'Plataforma', tone: 'platform' },
+  subscription_overdue: { label: 'Plataforma', tone: 'platform' },
+  subscription_suspended: { label: 'Plataforma', tone: 'platform' },
+  subscription_payment_registered: { label: 'Plataforma', tone: 'platform' },
+  ai_report_daily: { label: 'IA', tone: 'ai' },
+  ai_report_weekly: { label: 'IA', tone: 'ai' },
+};
+
+const notificationMeta = (type: string) => notificationLabels[type] || { label: 'Aviso', tone: 'default' as const };
+
+const formatNotificationTime = (value?: string) => {
+  if (!value) return '';
+  return new Date(value).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const referenceLabel = (item: AppNotification) => {
+  if (!item.referenceType) return '';
+  const labels: Record<string, string> = {
+    product: 'Produto',
+    purchase: 'Compra',
+    payment_transaction: 'Transacao',
+    fiscal_document: 'Documento fiscal',
+    sale: 'Venda',
+    subscription: 'Assinatura',
+    ai_report: 'Relatorio',
+  };
+  return labels[item.referenceType] || item.referenceType;
+};
 
 export default function AppLayout() {
   const { fetchProducts, clearProducts } = useInventoryStore();
@@ -132,17 +176,23 @@ export default function AppLayout() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  const loadNotifications = useCallback(async (sync = false) => {
+    if (!gestor || !isAuthenticated()) return;
+    try {
+      if (sync) await apiRequest('/notifications/sync', { method: 'POST' });
+      const rows = await apiRequest<AppNotification[]>('/notifications');
+      setNotifications(rows);
+    } catch {
+      setNotifications([]);
+    }
+  }, [gestor, isAuthenticated]);
+
   useEffect(() => {
     if (!gestor || !isAuthenticated()) return;
-    const loadNotifications = () => {
-      apiRequest<AppNotification[]>('/notifications')
-        .then(setNotifications)
-        .catch(() => setNotifications([]));
-    };
     loadNotifications();
     const timer = window.setInterval(loadNotifications, 60000);
     return () => window.clearInterval(timer);
-  }, [gestor, isAuthenticated]);
+  }, [gestor, isAuthenticated, loadNotifications]);
 
   useEffect(() => {
     if (superAdmin || !isAuthenticated()) return;
@@ -318,19 +368,31 @@ export default function AppLayout() {
                     <div className="notifications-dropdown">
                       <div className="notifications-header">
                         <strong>Notificacoes</strong>
-                        {unreadNotifications > 0 && (
-                          <button onClick={markAllNotificationsRead}><CheckCheck size={14} /> Ler todas</button>
-                        )}
+                        <div>
+                          <button onClick={() => loadNotifications(true)}><RefreshCw size={14} /> Atualizar</button>
+                          {unreadNotifications > 0 && (
+                            <button onClick={markAllNotificationsRead}><CheckCheck size={14} /> Ler todas</button>
+                          )}
+                        </div>
                       </div>
                       <div className="notifications-list">
                         {notifications.length === 0 ? (
                           <div className="notification-empty">Nenhuma notificacao.</div>
-                        ) : notifications.map(item => (
-                          <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => markNotificationRead(item.id)}>
-                            <span>{item.title}</span>
-                            <small>{item.message}</small>
-                          </button>
-                        ))}
+                        ) : notifications.map(item => {
+                          const meta = notificationMeta(item.type);
+                          const ref = referenceLabel(item);
+                          return (
+                            <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => markNotificationRead(item.id)}>
+                              <div className="notification-item-top">
+                                <span className={`notification-type ${meta.tone}`}>{meta.label}</span>
+                                <small>{formatNotificationTime(item.createdAt)}</small>
+                              </div>
+                              <span className="notification-title">{item.title}</span>
+                              <small className="notification-message">{item.message}</small>
+                              {ref && <em className="notification-reference">{ref}</em>}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
