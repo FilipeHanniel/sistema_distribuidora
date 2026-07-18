@@ -257,6 +257,47 @@ test('restringe rotas administrativas e permite acesso controlado ao SuperAdmin'
   assert.ok(productsB.payload.every(item => item.establishmentId === 'est-b'));
 });
 
+test('limita operador ao fluxo operacional do caixa', async () => {
+  const operatorLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'caixa', password: 'caixa-a-123' },
+  });
+  assert.equal(operatorLogin.status, 200);
+  const operatorToken = operatorLogin.payload.token;
+
+  const [products, settings, paymentConfig] = await Promise.all([
+    request('/api/products', { token: operatorToken }),
+    request('/api/settings', { token: operatorToken }),
+    request('/api/payments/config', { token: operatorToken }),
+  ]);
+  assert.equal(products.status, 200);
+  assert.equal(settings.status, 200);
+  assert.equal(paymentConfig.status, 200);
+
+  const restrictedCalls = await Promise.all([
+    request('/api/users', { token: operatorToken }),
+    request('/api/pix/accounts', { token: operatorToken }),
+    request('/api/reports/inventory', { token: operatorToken }),
+    request('/api/ai/reports?period=daily', { token: operatorToken }),
+    request('/api/products/product-a/stock', {
+      token: operatorToken,
+      method: 'PATCH',
+      body: { quantityStep: 1 },
+    }),
+    request('/api/payments/card/transaction-a/simulate', {
+      token: operatorToken,
+      method: 'POST',
+      body: { scenario: 'approved' },
+    }),
+  ]);
+
+  for (const response of restrictedCalls) {
+    assert.equal(response.status, 403);
+    assert.equal(response.payload.code, 'permission_denied');
+  }
+  assert.equal(db.prepare('SELECT stock FROM products WHERE id = ?').get('product-a').stock, 10);
+});
+
 test('invalida sessao antiga apos troca da propria senha', async () => {
   const securityNow = new Date().toISOString();
   db.prepare(`

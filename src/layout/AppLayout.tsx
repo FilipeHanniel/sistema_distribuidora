@@ -31,6 +31,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useUserStore } from '../store/useUserStore';
 import { DEFAULT_UI_SETTINGS, useSettingsStore } from '../store/useSettingsStore';
 import { apiRequest } from '../lib/api';
+import { defaultPathForRole, hasRolePermission } from '../lib/permissions';
 import type { AppNotification, TenantStatus } from '../types';
 
 const PAGE_TITLES: Record<string, string> = {
@@ -101,7 +102,7 @@ const referenceLabel = (item: AppNotification) => {
 export default function AppLayout() {
   const { fetchProducts, clearProducts } = useInventoryStore();
   const { fetchSales, clearSalesSession } = useSalesStore();
-  const { user, logout, isAuthenticated, isSuperAdmin, isGestor, isOperador } = useAuthStore();
+  const { user, logout, isAuthenticated, isSuperAdmin, isGestor } = useAuthStore();
   const { fetchUsers, clearUsers } = useUserStore();
   const { settings, fetchSettings, clearSettings } = useSettingsStore();
   const { lastSale, showSuccessPopup, closeSuccessPopup } = useSalesStore();
@@ -118,7 +119,15 @@ export default function AppLayout() {
 
   const superAdmin = isSuperAdmin();
   const gestor = isGestor();
-  const operador = isOperador();
+  const canManageNotifications = hasRolePermission(user?.role, 'notifications.manage');
+  const canManageProducts = hasRolePermission(user?.role, 'products.manage');
+  const canManagePurchases = hasRolePermission(user?.role, 'purchases.manage');
+  const canReadSales = hasRolePermission(user?.role, 'sales.read');
+  const canManageUsers = hasRolePermission(user?.role, 'users.manage');
+  const canConfigurePayments = hasRolePermission(user?.role, 'payments.configure');
+  const canReconcilePayments = hasRolePermission(user?.role, 'payments.reconcile');
+  const canManageFiscal = hasRolePermission(user?.role, 'fiscal.manage');
+  const canManageSettings = hasRolePermission(user?.role, 'settings.manage');
 
   useEffect(() => {
     clearProducts();
@@ -177,7 +186,7 @@ export default function AppLayout() {
   }, []);
 
   const loadNotifications = useCallback(async (sync = false) => {
-    if (!gestor || !isAuthenticated()) return;
+    if (!canManageNotifications || !isAuthenticated()) return;
     try {
       if (sync) await apiRequest('/notifications/sync', { method: 'POST' });
       const rows = await apiRequest<AppNotification[]>('/notifications');
@@ -185,14 +194,14 @@ export default function AppLayout() {
     } catch {
       setNotifications([]);
     }
-  }, [gestor, isAuthenticated]);
+  }, [canManageNotifications, isAuthenticated]);
 
   useEffect(() => {
-    if (!gestor || !isAuthenticated()) return;
+    if (!canManageNotifications || !isAuthenticated()) return;
     loadNotifications();
     const timer = window.setInterval(loadNotifications, 60000);
     return () => window.clearInterval(timer);
-  }, [gestor, isAuthenticated, loadNotifications]);
+  }, [canManageNotifications, isAuthenticated, loadNotifications]);
 
   useEffect(() => {
     if (superAdmin || !isAuthenticated()) return;
@@ -229,16 +238,16 @@ export default function AppLayout() {
   } else if (gestor) {
     navItems = [
       { to: '/', icon: <LayoutDashboard size={20} />, label: 'Painel', end: true },
-      { to: '/inventory', icon: <Package size={20} />, label: 'Estoque' },
-      { to: '/purchases', icon: <PackagePlus size={20} />, label: 'Compras' },
+      ...(canManageProducts ? [{ to: '/inventory', icon: <Package size={20} />, label: 'Estoque' }] : []),
+      ...(canManagePurchases ? [{ to: '/purchases', icon: <PackagePlus size={20} />, label: 'Compras' }] : []),
       { to: '/sales', icon: <ShoppingCart size={20} />, label: 'Ponto de Venda' },
-      { to: '/analytics', icon: <BarChart3 size={20} />, label: 'Relatorios' },
-      { to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' },
-      { to: '/pix', icon: <CreditCard size={20} />, label: 'Recebimentos' },
-      { to: '/transactions', icon: <WalletCards size={20} />, label: 'Transacoes' },
-      { to: '/fiscal', icon: <FileText size={20} />, label: 'Fiscal NFC-e' },
+      ...(canReadSales ? [{ to: '/analytics', icon: <BarChart3 size={20} />, label: 'Relatorios' }] : []),
+      ...(canManageUsers ? [{ to: '/users', icon: <UsersIcon size={20} />, label: 'Funcionários' }] : []),
+      ...(canConfigurePayments ? [{ to: '/pix', icon: <CreditCard size={20} />, label: 'Recebimentos' }] : []),
+      ...(canReconcilePayments ? [{ to: '/transactions', icon: <WalletCards size={20} />, label: 'Transacoes' }] : []),
+      ...(canManageFiscal ? [{ to: '/fiscal', icon: <FileText size={20} />, label: 'Fiscal NFC-e' }] : []),
       { to: '/comprovantes', icon: <ClipboardList size={20} />, label: 'Comprovantes' },
-      { to: '/settings', icon: <SlidersHorizontal size={20} />, label: 'Configuracoes' },
+      ...(canManageSettings ? [{ to: '/settings', icon: <SlidersHorizontal size={20} />, label: 'Configuracoes' }] : []),
     ];
   } else {
     // operador
@@ -358,7 +367,7 @@ export default function AppLayout() {
             </div>
 
             <div className="topbar-right">
-              {gestor && (
+              {canManageNotifications && (
                 <div className="notifications-menu" ref={notificationsRef}>
                   <button className={`notification-button ${isNotificationsOpen ? 'active' : ''}`} onClick={() => setIsNotificationsOpen(!isNotificationsOpen)} aria-label="Notificacoes">
                     <Bell size={18} />
@@ -468,18 +477,18 @@ export default function AppLayout() {
           <div className="content-scroll">
             <Routes>
               {/* Super Admin routes */}
-              <Route path="/superadmin" element={superAdmin ? <SuperAdmin /> : <Navigate to={gestor ? '/' : '/sales'} />} />
+              <Route path="/superadmin" element={superAdmin ? <SuperAdmin /> : <Navigate to={defaultPathForRole(user?.role)} />} />
 
               {/* Gestor routes */}
-              <Route path="/" element={!operador ? <Dashboard /> : <Navigate to="/sales" />} />
-              <Route path="/inventory" element={gestor ? <Inventory /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/purchases" element={gestor ? <Purchases /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/analytics" element={gestor ? <Analytics /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/users" element={gestor ? <Users /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/pix" element={gestor ? <PixSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/transactions" element={gestor ? <PaymentTransactions /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/fiscal" element={gestor ? <FiscalSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
-              <Route path="/settings" element={gestor ? <EstablishmentSettings /> : <Navigate to={superAdmin ? '/superadmin' : '/sales'} />} />
+              <Route path="/" element={gestor ? <Dashboard /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/inventory" element={canManageProducts ? <Inventory /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/purchases" element={canManagePurchases ? <Purchases /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/analytics" element={canReadSales ? <Analytics /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/users" element={canManageUsers ? <Users /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/pix" element={canConfigurePayments ? <PixSettings /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/transactions" element={canReconcilePayments ? <PaymentTransactions /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/fiscal" element={canManageFiscal ? <FiscalSettings /> : <Navigate to={defaultPathForRole(user?.role)} />} />
+              <Route path="/settings" element={canManageSettings ? <EstablishmentSettings /> : <Navigate to={defaultPathForRole(user?.role)} />} />
 
               {/* Shared routes */}
               <Route path="/sales" element={!superAdmin ? <Sales /> : <Navigate to="/superadmin" />} />
@@ -487,9 +496,7 @@ export default function AppLayout() {
 
               {/* Default redirect */}
               <Route path="*" element={
-                superAdmin ? <Navigate to="/superadmin" /> :
-                gestor ? <Navigate to="/" /> :
-                <Navigate to="/sales" />
+                <Navigate to={defaultPathForRole(user?.role)} />
               } />
             </Routes>
           </div>

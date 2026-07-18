@@ -92,7 +92,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 - Exigir HTTPS em producao. Preparado em 17/07/2026 com `ENFORCE_HTTPS`, `trust proxy`, redirecionamento seguro e headers HTTP basicos, dependente de Nginx com `X-Forwarded-Proto`.
 - Revisar segredos no `.env`. Concluido em 17/07/2026 com validacao de `JWT_SECRET` em producao, aviso para `MASTER_PASSWORD`, `ALLOWED_ORIGINS` explicito e checklist em [docs/seguranca-producao.md](seguranca-producao.md).
 - Criar politica de troca de senha e recuperacao. Parcial em 17/07/2026 com regra minima de senha e invalidacao de sessoes antigas apos troca/reset; recuperacao ainda pendente.
-- Melhorar permissoes por perfil.
+- Melhorar permissoes por perfil. Concluido em 17/07/2026 com politica nomeada de permissoes no backend, menus/rotas do frontend por permissao e testes para limitar operador ao fluxo do caixa.
 - Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
 - Criar rotina de backup e restauracao testada.
 - Documentar LGPD basica para dados de clientes/usuarios.
@@ -126,8 +126,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Melhorar permissoes por perfil.
-2. Criar rotina de backup e restauracao testada.
-3. Documentar LGPD basica para dados de clientes/usuarios.
+1. Criar rotina de backup e restauracao testada.
+2. Documentar LGPD basica para dados de clientes/usuarios.
+3. Criar politica de recuperacao de senha.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

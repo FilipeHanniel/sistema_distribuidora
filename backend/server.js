@@ -269,26 +269,85 @@ const isSuperAdmin = (req, res, next) => {
   next();
 };
 
-const isGestorOrAbove = (req, res, next) => {
-  if (!['gestor', 'superadmin'].includes(req.user.role)) {
-    return res.status(403).json({ error: 'Acesso restrito ao Gestor ou superior.' });
-  }
-  next();
-};
-
-const isGestor = (req, res, next) => {
-  if (req.user.role !== 'gestor') {
-    return res.status(403).json({ error: 'Acesso restrito ao Gestor do estabelecimento.' });
-  }
-  next();
-};
-
 const isTenantUser = (req, res, next) => {
   if (req.user.role === 'superadmin') {
     return res.status(403).json({ error: 'Super Admin não opera dados de venda ou estoque diretamente.' });
   }
   if (!req.user.establishmentId) {
     return res.status(403).json({ error: 'Usuário sem estabelecimento vinculado.' });
+  }
+  next();
+};
+
+const ROLE_PERMISSIONS = {
+  superadmin: new Set([
+    'platform.admin',
+  ]),
+  gestor: new Set([
+    'tenant.read',
+    'tenant.operate',
+    'users.manage',
+    'products.manage',
+    'products.quick_create',
+    'stock.adjust',
+    'suppliers.manage',
+    'purchases.manage',
+    'sales.read',
+    'sales.create',
+    'settings.manage',
+    'payments.configure',
+    'payments.create',
+    'payments.reconcile',
+    'payments.simulate',
+    'fiscal.manage',
+    'reports.view',
+    'ai.reports.view',
+    'notifications.manage',
+  ]),
+  operador: new Set([
+    'tenant.read',
+    'tenant.operate',
+    'products.quick_create',
+    'sales.create',
+    'payments.create',
+  ]),
+};
+
+const permissionMessages = {
+  'platform.admin': 'Acesso restrito ao Super Administrador.',
+  'tenant.operate': 'Acesso restrito a usuarios do estabelecimento.',
+  'users.manage': 'Acesso restrito a gestao de funcionarios.',
+  'products.manage': 'Acesso restrito a gestao de produtos.',
+  'stock.adjust': 'Acesso restrito ao Gestor para ajuste manual de estoque.',
+  'suppliers.manage': 'Acesso restrito a gestao de fornecedores.',
+  'purchases.manage': 'Acesso restrito a gestao de compras.',
+  'sales.read': 'Acesso restrito a relatorios de venda.',
+  'settings.manage': 'Acesso restrito a configuracao do estabelecimento.',
+  'payments.configure': 'Acesso restrito a configuracao de recebimentos.',
+  'payments.reconcile': 'Acesso restrito a conciliacao de pagamentos.',
+  'payments.simulate': 'Acesso restrito ao Gestor para simulacao administrativa.',
+  'fiscal.manage': 'Acesso restrito a configuracao fiscal.',
+  'reports.view': 'Acesso restrito aos relatorios gerenciais.',
+  'ai.reports.view': 'Acesso restrito aos relatorios inteligentes.',
+  'notifications.manage': 'Acesso restrito a central de notificacoes.',
+};
+
+const userHasPermission = (role, permission) => Boolean(ROLE_PERMISSIONS[role]?.has(permission));
+
+const requirePermission = (permission) => (req, res, next) => {
+  if (!userHasPermission(req.user.role, permission)) {
+    return res.status(403).json({
+      error: permissionMessages[permission] || 'Sem permissao para executar esta acao.',
+      code: 'permission_denied',
+      permission,
+    });
+  }
+  if (permission !== 'platform.admin' && req.user.role !== 'superadmin' && !req.user.establishmentId) {
+    return res.status(403).json({
+      error: 'Usuario sem estabelecimento vinculado.',
+      code: 'tenant_required',
+      permission,
+    });
   }
   next();
 };
@@ -1899,7 +1958,7 @@ app.post('/api/login', (req, res) => {
 // ==============================
 // USUÁRIOS
 // ==============================
-app.get('/api/users', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/users', authenticateToken, requirePermission('users.manage'), (req, res) => {
   try {
     const f = estFilterWhere(req);
     const users = db.prepare(
@@ -1911,7 +1970,7 @@ app.get('/api/users', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.get('/api/tenant/status', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/tenant/status', authenticateToken, requirePermission('tenant.read'), (req, res) => {
   try {
     const tenantStatus = buildTenantStatus(req.user.establishmentId);
     if (!tenantStatus) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
@@ -1921,7 +1980,7 @@ app.get('/api/tenant/status', authenticateToken, isTenantUser, (req, res) => {
   }
 });
 
-app.get('/api/settings', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/settings', authenticateToken, requirePermission('tenant.read'), (req, res) => {
   try {
     const settings = getTenantSettings(req.user.establishmentId);
     if (!settings) return res.status(404).json({ error: 'Estabelecimento nao encontrado.' });
@@ -1931,7 +1990,7 @@ app.get('/api/settings', authenticateToken, isTenantUser, (req, res) => {
   }
 });
 
-app.put('/api/settings', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.put('/api/settings', authenticateToken, requirePermission('settings.manage'), requireOperationalSubscription, (req, res) => {
   const validation = validateTenantSettings(req.body);
   if (!validation.valid) {
     return res.status(400).json({ error: validation.errors[0], errors: validation.errors });
@@ -1982,7 +2041,7 @@ app.put('/api/settings', authenticateToken, isGestor, requireOperationalSubscrip
   }
 });
 
-app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.post('/api/register', authenticateToken, requirePermission('users.manage'), requireOperationalSubscription, (req, res) => {
   const { username, password, name, role } = req.body;
   if (!username || !password || !name) return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
   const usernameResult = validateUsername(username);
@@ -2074,7 +2133,7 @@ app.post('/api/register', authenticateToken, isGestorOrAbove, requireOperational
   }
 });
 
-app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.put('/api/users/:id', authenticateToken, requirePermission('users.manage'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { name, role, password, username } = req.body;
   try {
@@ -2124,7 +2183,7 @@ app.put('/api/users/:id', authenticateToken, isGestorOrAbove, requireOperational
   }
 });
 
-app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.patch('/api/users/:id/status', authenticateToken, requirePermission('users.manage'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { active } = req.body;
   try {
@@ -2150,7 +2209,7 @@ app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, requireOp
   }
 });
 
-app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.patch('/api/users/:id/delete', authenticateToken, requirePermission('users.manage'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   try {
     const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0").get(id);
@@ -2204,7 +2263,7 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
 // ==============================
 // FORNECEDORES, COMPRAS E ESTOQUE
 // ==============================
-app.get('/api/suppliers', authenticateToken, isGestor, (req, res) => {
+app.get('/api/suppliers', authenticateToken, requirePermission('suppliers.manage'), (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || '') === 'true';
     const rows = db.prepare(`
@@ -2220,7 +2279,7 @@ app.get('/api/suppliers', authenticateToken, isGestor, (req, res) => {
   }
 });
 
-app.post('/api/suppliers', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.post('/api/suppliers', authenticateToken, requirePermission('suppliers.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const supplier = normalizeSupplierPayload(req.body);
     const id = uuidv4();
@@ -2249,7 +2308,7 @@ app.post('/api/suppliers', authenticateToken, isGestor, requireOperationalSubscr
   }
 });
 
-app.put('/api/suppliers/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.put('/api/suppliers/:id', authenticateToken, requirePermission('suppliers.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const current = db.prepare('SELECT * FROM suppliers WHERE id = ? AND establishmentId = ?')
       .get(req.params.id, req.user.establishmentId);
@@ -2280,7 +2339,7 @@ app.put('/api/suppliers/:id', authenticateToken, isGestor, requireOperationalSub
   }
 });
 
-app.delete('/api/suppliers/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.delete('/api/suppliers/:id', authenticateToken, requirePermission('suppliers.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ? AND establishmentId = ?')
       .get(req.params.id, req.user.establishmentId);
@@ -2306,7 +2365,7 @@ app.delete('/api/suppliers/:id', authenticateToken, isGestor, requireOperational
   }
 });
 
-app.get('/api/purchases', authenticateToken, isGestor, (req, res) => {
+app.get('/api/purchases', authenticateToken, requirePermission('purchases.manage'), (req, res) => {
   try {
     const status = String(req.query.status || '').trim();
     const validStatuses = new Set(['draft', 'received', 'cancelled']);
@@ -2330,7 +2389,7 @@ app.get('/api/purchases', authenticateToken, isGestor, (req, res) => {
   }
 });
 
-app.get('/api/purchases/:id', authenticateToken, isGestor, (req, res) => {
+app.get('/api/purchases/:id', authenticateToken, requirePermission('purchases.manage'), (req, res) => {
   try {
     const purchase = getPurchaseWithItems(db, req.params.id, req.user.establishmentId);
     if (!purchase) throw new InventoryError('Compra nao encontrada.', 404);
@@ -2358,7 +2417,7 @@ const preparePurchasePayload = (req) => {
   };
 };
 
-app.post('/api/purchases', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.post('/api/purchases', authenticateToken, requirePermission('purchases.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const payload = preparePurchasePayload(req);
     const id = uuidv4();
@@ -2396,7 +2455,7 @@ app.post('/api/purchases', authenticateToken, isGestor, requireOperationalSubscr
   }
 });
 
-app.put('/api/purchases/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.put('/api/purchases/:id', authenticateToken, requirePermission('purchases.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const current = db.prepare('SELECT * FROM purchases WHERE id = ? AND establishmentId = ?')
       .get(req.params.id, req.user.establishmentId);
@@ -2437,7 +2496,7 @@ app.put('/api/purchases/:id', authenticateToken, isGestor, requireOperationalSub
   }
 });
 
-app.post('/api/purchases/:id/receive', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.post('/api/purchases/:id/receive', authenticateToken, requirePermission('purchases.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const purchase = receivePurchase({
       db,
@@ -2469,7 +2528,7 @@ app.post('/api/purchases/:id/receive', authenticateToken, isGestor, requireOpera
   }
 });
 
-app.post('/api/purchases/:id/cancel', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.post('/api/purchases/:id/cancel', authenticateToken, requirePermission('purchases.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const purchase = cancelPurchase({
       db,
@@ -2492,7 +2551,7 @@ app.post('/api/purchases/:id/cancel', authenticateToken, isGestor, requireOperat
   }
 });
 
-app.delete('/api/purchases/:id', authenticateToken, isGestor, requireOperationalSubscription, (req, res) => {
+app.delete('/api/purchases/:id', authenticateToken, requirePermission('purchases.manage'), requireOperationalSubscription, (req, res) => {
   try {
     const purchase = db.prepare('SELECT * FROM purchases WHERE id = ? AND establishmentId = ?')
       .get(req.params.id, req.user.establishmentId);
@@ -2512,7 +2571,7 @@ app.delete('/api/purchases/:id', authenticateToken, isGestor, requireOperational
   }
 });
 
-app.get('/api/stock-movements', authenticateToken, isGestor, (req, res) => {
+app.get('/api/stock-movements', authenticateToken, requirePermission('reports.view'), (req, res) => {
   try {
     const clauses = ['establishmentId = ?'];
     const params = [req.user.establishmentId];
@@ -2537,7 +2596,7 @@ app.get('/api/stock-movements', authenticateToken, isGestor, (req, res) => {
   }
 });
 
-app.get('/api/reports/inventory', authenticateToken, isGestor, (req, res) => {
+app.get('/api/reports/inventory', authenticateToken, requirePermission('reports.view'), (req, res) => {
   try {
     const report = buildInventoryReport(db, req.user.establishmentId, {
       periodDays: req.query.periodDays,
@@ -2610,7 +2669,7 @@ const createProductRecord = ({ data, establishmentId, userId }) => {
 // ==============================
 // PRODUTOS
 // ==============================
-app.get('/api/products', authenticateToken, (req, res) => {
+app.get('/api/products', authenticateToken, requirePermission('tenant.read'), (req, res) => {
   try {
     const f = estFilterWhere(req);
     res.json(db.prepare(`SELECT * FROM products ${f.clause} ORDER BY createdAt DESC`).all(...f.params));
@@ -2619,7 +2678,7 @@ app.get('/api/products', authenticateToken, (req, res) => {
   }
 });
 
-app.get('/api/products/by-barcode', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/products/by-barcode', authenticateToken, requirePermission('tenant.operate'), (req, res) => {
   try {
     const barcode = normalizeBarcode(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Informe o codigo de barras.' });
@@ -2632,7 +2691,7 @@ app.get('/api/products/by-barcode', authenticateToken, isTenantUser, (req, res) 
   }
 });
 
-app.post('/api/products/quick', authenticateToken, isTenantUser, requireOperationalSubscription, (req, res) => {
+app.post('/api/products/quick', authenticateToken, requirePermission('products.quick_create'), requireOperationalSubscription, (req, res) => {
   try {
     const data = normalizeQuickProduct(req.body);
     const estId = req.user.establishmentId;
@@ -2673,7 +2732,7 @@ app.post('/api/products/quick', authenticateToken, isTenantUser, requireOperatio
   }
 });
 
-app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.post('/api/products', authenticateToken, requirePermission('products.manage'), requireOperationalSubscription, (req, res) => {
   const { barcode, name, costPrice, sellPrice, stock, category, ncm, cfop, csosn, cst, fiscalUnit, origin, taxRate } = req.body;
   if (!name || costPrice == null || sellPrice == null) {
     return res.status(400).json({ error: 'Nome, preço de custo e preço de venda são obrigatórios.' });
@@ -2749,7 +2808,7 @@ app.post('/api/products', authenticateToken, isGestorOrAbove, requireOperational
   }
 });
 
-app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.put('/api/products/:id', authenticateToken, requirePermission('products.manage'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const now = new Date().toISOString();
@@ -2815,7 +2874,7 @@ app.put('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperatio
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.delete('/api/products/:id', authenticateToken, requirePermission('products.manage'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   try {
     const product = canAccessTenantRecord(req, 'products', id);
@@ -2835,7 +2894,7 @@ app.delete('/api/products/:id', authenticateToken, isGestorOrAbove, requireOpera
 });
 
 // SEGURANÇA: verificar que o produto pertence ao estabelecimento antes de atualizar estoque
-app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, requireOperationalSubscription, (req, res) => {
+app.patch('/api/products/:id/stock', authenticateToken, requirePermission('stock.adjust'), requireOperationalSubscription, (req, res) => {
   const { id } = req.params;
   const { quantityStep } = req.body;
   const now = new Date().toISOString();
@@ -2881,7 +2940,7 @@ app.patch('/api/products/:id/stock', authenticateToken, isTenantUser, requireOpe
 // ==============================
 // VENDAS
 // ==============================
-app.get('/api/sales', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/sales', authenticateToken, requirePermission('sales.read'), (req, res) => {
   try {
     const f = estFilterWhere(req);
     const sales = db.prepare(`SELECT * FROM sales ${f.clause} ORDER BY createdAt DESC`).all(...f.params);
@@ -2896,7 +2955,7 @@ app.get('/api/sales', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/sales/today', authenticateToken, requirePermission('tenant.operate'), (req, res) => {
   try {
     const estId = req.user.establishmentId;
     if (!estId) return res.status(403).json({ error: 'Sem estabelecimento vinculado.' });
@@ -2921,7 +2980,7 @@ app.get('/api/sales/today', authenticateToken, isTenantUser, (req, res) => {
 // ==============================
 // FISCAL - NFC-e GO
 // ==============================
-app.get('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/fiscal/settings', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Configuracao fiscal pertence a um estabelecimento.' });
     const settings = ensureFiscalSettings(req.user.establishmentId);
@@ -2934,7 +2993,7 @@ app.get('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
   }
 });
 
-app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) => {
+app.put('/api/fiscal/settings', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Configuracao fiscal pertence a um estabelecimento.' });
     const estId = req.user.establishmentId;
@@ -3020,7 +3079,7 @@ app.put('/api/fiscal/settings', authenticateToken, isGestorOrAbove, (req, res) =
   }
 });
 
-app.post('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
+app.post('/api/fiscal/certificate', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   let storedCertificate = null;
   try {
     const estId = req.user.establishmentId;
@@ -3090,7 +3149,7 @@ app.post('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
   }
 });
 
-app.delete('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) => {
+app.delete('/api/fiscal/certificate', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const current = ensureFiscalSettings(estId);
@@ -3132,7 +3191,7 @@ app.delete('/api/fiscal/certificate', authenticateToken, isGestor, (req, res) =>
   }
 });
 
-app.get('/api/fiscal/documents', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/fiscal/documents', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documentos fiscais pertencem a um estabelecimento.' });
     const status = req.query.status ? String(req.query.status) : null;
@@ -3157,7 +3216,7 @@ app.get('/api/fiscal/documents', authenticateToken, isGestorOrAbove, (req, res) 
   }
 });
 
-app.get('/api/fiscal/sales/:saleId', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/fiscal/sales/:saleId', authenticateToken, requirePermission('tenant.operate'), (req, res) => {
   try {
     const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
     if (!sale) return res.status(404).json({ error: 'Venda nao encontrada.' });
@@ -3169,7 +3228,7 @@ app.get('/api/fiscal/sales/:saleId', authenticateToken, isTenantUser, (req, res)
   }
 });
 
-app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove, (req, res) => {
+app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
     const sale = db.prepare('SELECT * FROM sales WHERE id = ? AND establishmentId = ?').get(req.params.saleId, req.user.establishmentId);
@@ -3189,7 +3248,7 @@ app.post('/api/fiscal/sales/:saleId/prepare', authenticateToken, isGestorOrAbove
   }
 });
 
-app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, async (req, res) => {
+app.post('/api/fiscal/documents/:id/issue', authenticateToken, requirePermission('fiscal.manage'), async (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
     const document = await issueFiscalDocument(req.params.id, req.user.establishmentId);
@@ -3207,7 +3266,7 @@ app.post('/api/fiscal/documents/:id/issue', authenticateToken, isGestorOrAbove, 
   }
 });
 
-app.patch('/api/fiscal/documents/:id/printed', authenticateToken, isGestorOrAbove, (req, res) => {
+app.patch('/api/fiscal/documents/:id/printed', authenticateToken, requirePermission('fiscal.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Documento fiscal pertence a um estabelecimento.' });
     const now = new Date().toISOString();
@@ -3230,11 +3289,11 @@ app.patch('/api/fiscal/documents/:id/printed', authenticateToken, isGestorOrAbov
   }
 });
 
-app.get('/api/pix/providers', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/pix/providers', authenticateToken, requirePermission('payments.configure'), (req, res) => {
   res.json(PROVIDERS);
 });
 
-app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/notifications', authenticateToken, requirePermission('notifications.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') {
       return res.json([]);
@@ -3255,7 +3314,7 @@ app.get('/api/notifications', authenticateToken, isGestorOrAbove, (req, res) => 
   }
 });
 
-app.post('/api/notifications/sync', authenticateToken, isGestorOrAbove, (req, res) => {
+app.post('/api/notifications/sync', authenticateToken, requirePermission('notifications.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
     const result = syncOperationalNotifications({ establishmentId: req.user.establishmentId });
@@ -3266,7 +3325,7 @@ app.post('/api/notifications/sync', authenticateToken, isGestorOrAbove, (req, re
   }
 });
 
-app.patch('/api/notifications/:id/read', authenticateToken, isGestorOrAbove, (req, res) => {
+app.patch('/api/notifications/:id/read', authenticateToken, requirePermission('notifications.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
     db.prepare(`
@@ -3280,7 +3339,7 @@ app.patch('/api/notifications/:id/read', authenticateToken, isGestorOrAbove, (re
   }
 });
 
-app.patch('/api/notifications/read-all', authenticateToken, isGestorOrAbove, (req, res) => {
+app.patch('/api/notifications/read-all', authenticateToken, requirePermission('notifications.manage'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') return res.status(403).json({ error: 'Sem notificacoes de estabelecimento.' });
     db.prepare(`
@@ -3296,7 +3355,7 @@ app.patch('/api/notifications/read-all', authenticateToken, isGestorOrAbove, (re
   }
 });
 
-app.get('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/pix/accounts', authenticateToken, requirePermission('payments.configure'), (req, res) => {
   try {
     const estId = getTenantId(req);
     if (!estId) return res.status(400).json({ error: 'Estabelecimento obrigatorio.' });
@@ -3309,7 +3368,7 @@ app.get('/api/pix/accounts', authenticateToken, isGestorOrAbove, (req, res) => {
   }
 });
 
-app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.post('/api/pix/accounts', authenticateToken, requirePermission('payments.configure'), requireOperationalSubscription, (req, res) => {
   try {
     const estId = getTenantId(req);
     if (!estId || !ensureEstablishmentExists(estId)) {
@@ -3367,7 +3426,7 @@ app.post('/api/pix/accounts', authenticateToken, isGestorOrAbove, requireOperati
   }
 });
 
-app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.put('/api/pix/accounts/:id', authenticateToken, requirePermission('payments.configure'), requireOperationalSubscription, (req, res) => {
   try {
     const estId = req.user.role === 'superadmin' ? req.body.establishmentId : req.user.establishmentId;
     const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
@@ -3409,7 +3468,7 @@ app.put('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireOper
   }
 });
 
-app.get('/api/pix/accounts/:id/point/setup', authenticateToken, isGestor, async (req, res) => {
+app.get('/api/pix/accounts/:id/point/setup', authenticateToken, requirePermission('payments.configure'), async (req, res) => {
   try {
     const { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     const terminals = credentials.storeId || credentials.posId
@@ -3429,7 +3488,7 @@ app.get('/api/pix/accounts/:id/point/setup', authenticateToken, isGestor, async 
   }
 });
 
-app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
+app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, requirePermission('payments.configure'), requireOperationalSubscription, async (req, res) => {
   try {
     let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     const accountSuffix = account.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20).toUpperCase();
@@ -3499,7 +3558,7 @@ app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, r
   }
 });
 
-app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, isGestor, async (req, res) => {
+app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, requirePermission('payments.configure'), async (req, res) => {
   try {
     const { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     if (!credentials.storeId || !credentials.posId) {
@@ -3520,7 +3579,7 @@ app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, isGestor, as
   }
 });
 
-app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
+app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authenticateToken, requirePermission('payments.configure'), requireOperationalSubscription, async (req, res) => {
   try {
     let { account, credentials } = getMercadoPagoPointAccount(req.params.id, req.user.establishmentId);
     if (!credentials.storeId || !credentials.posId) {
@@ -3570,7 +3629,7 @@ app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authentic
   }
 });
 
-app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireOperationalSubscription, (req, res) => {
+app.delete('/api/pix/accounts/:id', authenticateToken, requirePermission('payments.configure'), requireOperationalSubscription, (req, res) => {
   try {
     const estId = req.user.role === 'superadmin' ? req.query.establishmentId : req.user.establishmentId;
     const account = db.prepare('SELECT * FROM pix_accounts WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
@@ -3605,7 +3664,7 @@ app.delete('/api/pix/accounts/:id', authenticateToken, isGestorOrAbove, requireO
   }
 });
 
-app.post('/api/sales', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/sales', authenticateToken, requirePermission('sales.create'), requireOperationalSubscription, async (req, res) => {
   const { items, totalAmount, paymentMethod } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Itens da venda são obrigatórios.' });
@@ -3631,7 +3690,7 @@ app.post('/api/sales', authenticateToken, isTenantUser, requireOperationalSubscr
   }
 });
 
-app.post('/api/payments/pix', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/pix', authenticateToken, requirePermission('payments.create'), requireOperationalSubscription, async (req, res) => {
   let transactionId = null;
   try {
     const { items, totalAmount, pixAccountId, deviceId } = req.body;
@@ -3733,14 +3792,14 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, requireOperationa
   }
 });
 
-app.get('/api/payments/config', authenticateToken, isTenantUser, (req, res) => {
+app.get('/api/payments/config', authenticateToken, requirePermission('tenant.read'), (req, res) => {
   res.json({
     strategy: 'polling',
     pollingIntervalMs: PAYMENT_POLLING_INTERVAL_MS,
   });
 });
 
-app.get('/api/payments/transactions', authenticateToken, isGestor, (req, res) => {
+app.get('/api/payments/transactions', authenticateToken, requirePermission('payments.reconcile'), (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const where = ['pt.establishmentId = ?'];
@@ -3840,7 +3899,7 @@ app.get('/api/payments/transactions', authenticateToken, isGestor, (req, res) =>
   }
 });
 
-app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/transactions/:id/reconcile', authenticateToken, requirePermission('payments.reconcile'), requireOperationalSubscription, async (req, res) => {
   const estId = req.user.establishmentId;
   try {
     let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?')
@@ -3886,7 +3945,7 @@ app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor
   }
 });
 
-app.post('/api/payments/card', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/card', authenticateToken, requirePermission('payments.create'), requireOperationalSubscription, async (req, res) => {
   let transactionId = null;
   try {
     const { items, totalAmount, accountId, paymentType, installments } = req.body;
@@ -3979,7 +4038,7 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, requireOperation
   }
 });
 
-app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async (req, res) => {
+app.get('/api/payments/card/:id/status', authenticateToken, requirePermission('payments.create'), async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -4001,7 +4060,7 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
   }
 });
 
-app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (req, res) => {
+app.get('/api/payments/pix/:id/status', authenticateToken, requirePermission('payments.create'), async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     let transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(req.params.id, estId);
@@ -4054,7 +4113,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
 // SUPER ADMIN — ESTABELECIMENTOS
 // ==============================
 // PAGAMENTOS PIX
-app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/pix/:id/cancel', authenticateToken, requirePermission('payments.create'), requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -4138,7 +4197,7 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, requir
   }
 });
 
-app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/card/:id/cancel', authenticateToken, requirePermission('payments.create'), requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -4195,7 +4254,7 @@ app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, requi
   }
 });
 
-app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, requireOperationalSubscription, async (req, res) => {
+app.post('/api/payments/card/:id/simulate', authenticateToken, requirePermission('payments.simulate'), requireOperationalSubscription, async (req, res) => {
   try {
     const estId = req.user.establishmentId;
     const transaction = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ? AND paymentMethod = ?')
@@ -4940,7 +4999,7 @@ app.delete('/api/admin/payments/:id', authenticateToken, isSuperAdmin, (req, res
 // ==============================
 // ROTAS DE IA
 // ==============================
-app.get('/api/ai/stock-predictions', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/ai/stock-predictions', authenticateToken, requirePermission('ai.reports.view'), (req, res) => {
   try {
     const f = estFilterWhere(req);
     const products = db.prepare(`SELECT * FROM products ${f.clause}`).all(...f.params);
@@ -4978,7 +5037,7 @@ app.get('/api/ai/stock-predictions', authenticateToken, isGestorOrAbove, (req, r
   }
 });
 
-app.get('/api/ai/reports', authenticateToken, isGestorOrAbove, async (req, res) => {
+app.get('/api/ai/reports', authenticateToken, requirePermission('ai.reports.view'), async (req, res) => {
   try {
     if (req.user.role === 'superadmin') {
       return res.status(403).json({ error: 'Relatorios de IA sao por estabelecimento.' });
@@ -4992,15 +5051,15 @@ app.get('/api/ai/reports', authenticateToken, isGestorOrAbove, async (req, res) 
   }
 });
 
-app.post('/api/ai/chat', authenticateToken, (req, res) => {
+app.post('/api/ai/chat', authenticateToken, requirePermission('ai.reports.view'), (req, res) => {
   res.status(410).json({ error: 'Chat de IA foi desativado. Use os relatorios gerenciais.' });
 });
 
-app.post('/api/ai/cross-sell', authenticateToken, (req, res) => {
+app.post('/api/ai/cross-sell', authenticateToken, requirePermission('ai.reports.view'), (req, res) => {
   res.status(410).json({ error: 'Sugestoes de IA no PDV foram desativadas. Use os relatorios gerenciais.' });
 });
 
-app.get('/api/ai/suggestions', authenticateToken, isGestorOrAbove, (req, res) => {
+app.get('/api/ai/suggestions', authenticateToken, requirePermission('ai.reports.view'), (req, res) => {
   try {
     const f = estFilterWhere(req);
     res.json(db.prepare(`SELECT * FROM ai_suggestions ${f.clause} ORDER BY count DESC, updatedAt DESC`).all(...f.params));
@@ -5009,7 +5068,7 @@ app.get('/api/ai/suggestions', authenticateToken, isGestorOrAbove, (req, res) =>
   }
 });
 
-app.delete('/api/ai/suggestions/:id', authenticateToken, isGestorOrAbove, (req, res) => {
+app.delete('/api/ai/suggestions/:id', authenticateToken, requirePermission('ai.reports.view'), (req, res) => {
   try {
     if (req.user.role === 'superadmin') {
       db.prepare('DELETE FROM ai_suggestions WHERE id = ?').run(req.params.id);
