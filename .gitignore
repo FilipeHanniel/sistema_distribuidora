@@ -25,6 +25,7 @@ backend/*.sqlite.backup-*
 backend/*.sqlite-journal
 backend/certs/
 backend/private/
+backups/
 tools/sefaz-fake/logs/
 
 # Editor directories and files

@@ -6,9 +6,19 @@ O banco principal da aplicacao fica em:
 /var/www/sistema_distribuidora/backend/banco.sqlite
 ```
 
-Como este arquivo contem os dados reais dos estabelecimentos, ele nao vai para o Git.
+Esse arquivo contem dados reais dos estabelecimentos e nao vai para o Git.
 
-## Backup manual
+## O que foi profissionalizado
+
+- Backup usa a API do SQLite via `better-sqlite3`, mais segura que copiar o arquivo enquanto o sistema pode estar usando o banco.
+- Antes e depois do backup, o script executa `integrity_check`.
+- Cada backup `.sqlite.gz` ganha um manifesto `.manifest.json` com data, hash SHA-256, tamanho e tabelas detectadas.
+- Restauracao exige confirmacao explicita.
+- Antes de substituir o banco atual, o script cria uma copia `before-restore`.
+- A restauracao falha se encontrar arquivos `-wal` ou `-shm`, sinal de que a aplicacao pode estar usando o banco.
+- Existe teste automatizado que cria, altera, restaura e valida um banco temporario.
+
+## Backup manual no VPS
 
 No servidor:
 
@@ -17,39 +27,102 @@ cd /var/www/sistema_distribuidora
 bash tools/backup-sqlite.sh
 ```
 
-O backup sera salvo em:
+Tambem pode usar:
+
+```bash
+npm run backup:sqlite
+```
+
+Por padrao, no VPS o backup sera salvo em:
 
 ```text
 /var/backups/sistema_distribuidora
 ```
 
-Exemplo de arquivo:
+Exemplo de arquivos:
 
 ```text
-banco-20260527-030000.sqlite.gz
+banco-20260717-030000.sqlite.gz
+banco-20260717-030000.sqlite.gz.manifest.json
 ```
 
-## Configurar backup automatico diario
+## Backup manual na maquina local
 
-No servidor, abra o cron:
+Na maquina local, o caminho padrao do backup e:
+
+```text
+backups/
+```
+
+Comando:
+
+```bash
+npm run backup:sqlite
+```
+
+Para escolher caminhos manualmente:
+
+```bash
+DB_FILE=backend/banco.sqlite BACKUP_DIR=backups npm run backup:sqlite
+```
+
+No PowerShell:
+
+```powershell
+$env:DB_FILE="backend/banco.sqlite"
+$env:BACKUP_DIR="backups"
+npm run backup:sqlite
+```
+
+## Backup automatico diario no VPS
+
+Abra o cron:
 
 ```bash
 crontab -e
 ```
 
-Adicione a linha:
+Adicione:
 
 ```cron
 0 3 * * * cd /var/www/sistema_distribuidora && bash tools/backup-sqlite.sh >> /var/log/sistema-distribuidora-backup.log 2>&1
 ```
 
-Isso cria backup todo dia as 03h.
+Isso cria backup todos os dias as 03h.
+
+## Retencao
+
+Por padrao, backups com mais de 15 dias sao removidos automaticamente.
+
+Para manter 30 dias:
+
+```bash
+KEEP_DAYS=30 bash tools/backup-sqlite.sh
+```
+
+No cron:
+
+```cron
+0 3 * * * cd /var/www/sistema_distribuidora && KEEP_DAYS=30 bash tools/backup-sqlite.sh >> /var/log/sistema-distribuidora-backup.log 2>&1
+```
 
 ## Conferir se o backup funcionou
 
 ```bash
 ls -lah /var/backups/sistema_distribuidora
 tail -n 50 /var/log/sistema-distribuidora-backup.log
+```
+
+Para conferir o manifesto:
+
+```bash
+cat /var/backups/sistema_distribuidora/banco-YYYYMMDD-HHMMSS.sqlite.gz.manifest.json
+```
+
+O campo `backupIntegrity` deve estar como:
+
+```json
+"backupIntegrity": "ok"
 ```
 
 ## Restaurar um backup
@@ -62,46 +135,71 @@ Atencao: restaurar substitui o banco atual. Faca isso apenas quando tiver certez
 pm2 stop sistema-distribuidora
 ```
 
-2. Faca uma copia de seguranca do banco atual:
+2. Execute a restauracao com confirmacao:
 
 ```bash
-cp /var/www/sistema_distribuidora/backend/banco.sqlite /var/www/sistema_distribuidora/backend/banco.sqlite.before-restore
+cd /var/www/sistema_distribuidora
+bash tools/restore-sqlite.sh --backup /var/backups/sistema_distribuidora/banco-YYYYMMDD-HHMMSS.sqlite.gz --yes
 ```
 
-3. Descompacte o backup escolhido:
+Tambem pode usar:
 
 ```bash
-gunzip -c /var/backups/sistema_distribuidora/banco-YYYYMMDD-HHMMSS.sqlite.gz > /var/www/sistema_distribuidora/backend/banco.sqlite
+npm run restore:sqlite -- --backup /var/backups/sistema_distribuidora/banco-YYYYMMDD-HHMMSS.sqlite.gz --yes
 ```
 
-4. Suba a aplicacao:
+O script cria automaticamente uma copia do banco anterior no formato:
+
+```text
+/var/www/sistema_distribuidora/backend/banco.sqlite.before-restore-YYYYMMDD-HHMMSS
+```
+
+3. Suba a aplicacao:
 
 ```bash
-pm2 start sistema-distribuidora
+pm2 restart sistema-distribuidora --update-env
 pm2 status
 ```
 
-5. Teste login, PDV e comprovantes.
+4. Teste login, PDV, comprovantes e fiscal.
 
-## Retencao
+## Restauracao bloqueada por seguranca
 
-O script remove automaticamente backups com mais de 15 dias.
+Se aparecer erro sobre arquivos `-wal` ou `-shm`, significa que o SQLite pode estar ativo.
 
-Para mudar isso, rode com:
+Confira:
 
 ```bash
-KEEP_DAYS=30 bash tools/backup-sqlite.sh
+ls -lah /var/www/sistema_distribuidora/backend/banco.sqlite*
 ```
 
-Ou ajuste o cron:
+Pare a aplicacao e tente novamente:
 
-```cron
-0 3 * * * cd /var/www/sistema_distribuidora && KEEP_DAYS=30 bash tools/backup-sqlite.sh >> /var/log/sistema-distribuidora-backup.log 2>&1
+```bash
+pm2 stop sistema-distribuidora
+bash tools/restore-sqlite.sh --backup /var/backups/sistema_distribuidora/banco-YYYYMMDD-HHMMSS.sqlite.gz --yes
 ```
 
-## Observacao importante
+## Teste automatizado
 
-Este backup fica no mesmo servidor. Ele protege contra erro de deploy e corrupcao local simples, mas nao protege contra perda total do VPS.
+O teste de restauracao roda junto com os testes do backend:
 
-Em uma fase posterior, envie uma copia para outro destino, como outro servidor, S3, Google Drive ou armazenamento equivalente.
+```bash
+cd backend
+npm test
+```
 
+Ele valida que:
+
+- um banco SQLite temporario e criado;
+- o backup comprimido e gerado;
+- o manifesto e criado;
+- backups antigos sao removidos pela retencao;
+- o banco alterado volta ao estado original apos restore;
+- o banco substituido fica salvo como `before-restore`.
+
+## Limite atual
+
+Este backup ainda fica no mesmo servidor. Ele protege contra erro operacional, deploy ruim e corrupcao simples, mas nao protege contra perda total do VPS.
+
+Em etapa futura, envie uma copia para outro destino, como outro servidor, S3, Google Drive ou armazenamento equivalente.

@@ -94,7 +94,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 - Criar politica de troca de senha e recuperacao. Parcial em 17/07/2026 com regra minima de senha e invalidacao de sessoes antigas apos troca/reset; recuperacao ainda pendente.
 - Melhorar permissoes por perfil. Concluido em 17/07/2026 com politica nomeada de permissoes no backend, menus/rotas do frontend por permissao e testes para limitar operador ao fluxo do caixa.
 - Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
-- Criar rotina de backup e restauracao testada.
+- Criar rotina de backup e restauracao testada. Concluido em 17/07/2026 com backup validado por `integrity_check`, manifesto SHA-256, restauracao com copia `before-restore`, bloqueio de WAL/SHM e teste automatizado em banco temporario.
 - Documentar LGPD basica para dados de clientes/usuarios.
 
 ## Fase 7 - Qualidade e testes
@@ -126,8 +126,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Criar rotina de backup e restauracao testada.
-2. Documentar LGPD basica para dados de clientes/usuarios.
-3. Criar politica de recuperacao de senha.
+1. Documentar LGPD basica para dados de clientes/usuarios.
+2. Criar politica de recuperacao de senha.
+3. Planejar copia externa dos backups fora do VPS.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
