@@ -97,6 +97,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 - Criar rotina de backup e restauracao testada. Concluido em 17/07/2026 com backup validado por `integrity_check`, manifesto SHA-256, restauracao com copia `before-restore`, bloqueio de WAL/SHM e teste automatizado em banco temporario.
 - Preparar copia externa dos backups fora do VPS. Concluido em 17/07/2026 com pacote `offsite-ready`, manifesto, SHA-256, guia de restauracao e script `tools/export-sqlite-backup.sh`. A escolha do armazenamento externo definitivo fica para operacao comercial.
 - Documentar LGPD basica para dados de clientes/usuarios. Concluido em 17/07/2026 com inventario inicial, papeis controlador/operador, cuidados com IA, fluxo de titulares, incidentes e checklist contratual em [docs/lgpd-basica.md](lgpd-basica.md).
+- Preparar termos/contrato LGPD para clientes piloto. Concluido em 18/07/2026 com minuta operacional em [docs/termos-clientes-piloto.md](termos-clientes-piloto.md), incluindo papeis LGPD, certificado A1, pagamentos, fiscal, IA, backups, suporte, incidentes e checklist de aceite.
 
 ## Fase 7 - Qualidade e testes
 
@@ -127,8 +128,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Preparar termos/contrato LGPD para clientes piloto.
-2. Definir destino externo definitivo para os backups, como outro servidor, S3, Google Drive ou equivalente.
-3. Criar recuperacao automatica por e-mail quando houver servico de e-mail transacional.
+1. Definir destino externo definitivo para os backups, como outro servidor, S3, Google Drive ou equivalente.
+2. Criar recuperacao automatica por e-mail quando houver servico de e-mail transacional.
+3. Revisar a minuta de termos para clientes piloto com advogado/contador antes de uso comercial real.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
