@@ -15,6 +15,7 @@ interface UserState {
   fetchUsers: () => Promise<void>;
   createUser: (userInfo: UserPayload) => Promise<boolean>;
   updateUser: (id: string, updates: UserPayload) => Promise<boolean>;
+  resetUserPassword: (id: string, newPassword: string) => Promise<boolean>;
   toggleUserStatus: (id: string, active: boolean) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
   changePassword: (data: { currentPassword: string; newPassword: string }) => Promise<{ success: boolean; message: string }>;
@@ -59,6 +60,21 @@ export const useUserStore = create<UserState>((set, get) => ({
     } catch (err) {
       console.error('Falha ao atualizar usuário:', err);
       alert(getApiErrorMessage(err, 'Erro ao atualizar usuário'));
+      return false;
+    }
+  },
+
+  resetUserPassword: async (id, newPassword) => {
+    try {
+      await apiRequest(`/users/${id}/password`, {
+        method: 'PATCH',
+        body: { newPassword },
+      });
+      get().fetchUsers();
+      return true;
+    } catch (err) {
+      console.error('Falha ao redefinir senha:', err);
+      alert(getApiErrorMessage(err, 'Erro ao redefinir senha'));
       return false;
     }
   },

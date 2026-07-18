@@ -91,7 +91,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 
 - Exigir HTTPS em producao. Preparado em 17/07/2026 com `ENFORCE_HTTPS`, `trust proxy`, redirecionamento seguro e headers HTTP basicos, dependente de Nginx com `X-Forwarded-Proto`.
 - Revisar segredos no `.env`. Concluido em 17/07/2026 com validacao de `JWT_SECRET` em producao, aviso para `MASTER_PASSWORD`, `ALLOWED_ORIGINS` explicito e checklist em [docs/seguranca-producao.md](seguranca-producao.md).
-- Criar politica de troca de senha e recuperacao. Parcial em 17/07/2026 com regra minima de senha e invalidacao de sessoes antigas apos troca/reset; recuperacao ainda pendente.
+- Criar politica de troca de senha e recuperacao. Concluido em 17/07/2026 com regra minima de senha, reset administrativo por SuperAdmin/gestor, senha temporaria com troca obrigatoria, bloqueio operacional ate a troca, invalidacao de sessoes e documentacao em [docs/politica-senhas-recuperacao.md](politica-senhas-recuperacao.md). Recuperacao automatica por e-mail fica como evolucao futura.
 - Melhorar permissoes por perfil. Concluido em 17/07/2026 com politica nomeada de permissoes no backend, menus/rotas do frontend por permissao e testes para limitar operador ao fluxo do caixa.
 - Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
 - Criar rotina de backup e restauracao testada. Concluido em 17/07/2026 com backup validado por `integrity_check`, manifesto SHA-256, restauracao com copia `before-restore`, bloqueio de WAL/SHM e teste automatizado em banco temporario.
@@ -126,8 +126,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Criar politica de recuperacao de senha.
-2. Planejar copia externa dos backups fora do VPS.
-3. Preparar termos/contrato LGPD para clientes piloto.
+1. Planejar copia externa dos backups fora do VPS.
+2. Preparar termos/contrato LGPD para clientes piloto.
+3. Criar recuperacao automatica por e-mail quando houver servico de e-mail transacional.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

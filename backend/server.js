@@ -250,12 +250,21 @@ const authenticateToken = (req, res, next) => {
     if (user.sessionGenerationId !== SESSION_GENERATION_ID) {
       return res.status(401).json({ error: 'O sistema foi atualizado. Entre novamente para continuar.' });
     }
-    const currentUser = db.prepare('SELECT active, isDeleted, authVersion FROM users WHERE id = ?').get(user.id);
+    const currentUser = db.prepare('SELECT active, isDeleted, authVersion, mustChangePassword FROM users WHERE id = ?').get(user.id);
     if (!currentUser || currentUser.active === 0 || currentUser.isDeleted === 1) {
       return res.status(401).json({ error: 'Sessao encerrada. Entre novamente para continuar.' });
     }
     if (Number(user.authVersion || 0) !== Number(currentUser.authVersion || 0)) {
       return res.status(401).json({ error: 'A senha foi redefinida. Entre novamente para continuar.' });
+    }
+    if (
+      Number(currentUser.mustChangePassword || 0) === 1 &&
+      !['/api/users/me/password', '/api/session'].includes(req.path)
+    ) {
+      return res.status(403).json({
+        error: 'Troque a senha temporaria antes de continuar.',
+        code: 'password_change_required',
+      });
     }
     req.user = user;
     next();
@@ -1928,6 +1937,7 @@ app.post('/api/login', (req, res) => {
       name: user.name,
       establishmentId: user.establishmentId || null,
       authVersion: Number(user.authVersion || 0),
+      mustChangePassword: Number(user.mustChangePassword || 0),
       sessionGenerationId: SESSION_GENERATION_ID,
     };
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
@@ -1947,6 +1957,7 @@ app.post('/api/login', (req, res) => {
         name: user.name,
         establishmentId: user.establishmentId || null,
         establishmentName,
+        mustChangePassword: Number(user.mustChangePassword || 0) === 1,
       }
     });
   } catch (err) {
@@ -1962,7 +1973,7 @@ app.get('/api/users', authenticateToken, requirePermission('users.manage'), (req
   try {
     const f = estFilterWhere(req);
     const users = db.prepare(
-      `SELECT id, username, name, role, active, establishmentId, createdAt FROM users ${f.clause} AND isDeleted = 0 AND role != 'superadmin' ORDER BY createdAt ASC`
+      `SELECT id, username, name, role, active, mustChangePassword, establishmentId, createdAt FROM users ${f.clause} AND isDeleted = 0 AND role != 'superadmin' ORDER BY createdAt ASC`
     ).all(...f.params);
     res.json(users);
   } catch (err) {
@@ -2061,7 +2072,7 @@ app.post('/api/register', authenticateToken, requirePermission('users.manage'), 
 
     const id = uuidv4();
     try {
-      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, ?)`)
+      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, mustChangePassword, createdAt) VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, 1, ?)`)
         .run(id, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), name.trim(), req.user.establishmentId, new Date().toISOString());
       logAudit({
         req,
@@ -2114,7 +2125,7 @@ app.post('/api/register', authenticateToken, requirePermission('users.manage'), 
     return res.status(400).json({ error: 'Estabelecimento obrigatório ou inválido.' });
   }
   try {
-    db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)`)
+    db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, mustChangePassword, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 1, ?)`)
       .run(id, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), name.trim(), assignedRole, estId, new Date().toISOString());
     logAudit({
       req,
@@ -2153,7 +2164,7 @@ app.put('/api/users/:id', authenticateToken, requirePermission('users.manage'), 
     let sql = 'UPDATE users SET name = ?, username = ?';
     const params = [String(name).trim(), usernameResult.username];
     if (passwordResult) {
-      sql += ', password = ?, authVersion = authVersion + 1';
+      sql += ', password = ?, authVersion = authVersion + 1, mustChangePassword = 1';
       params.push(bcrypt.hashSync(passwordResult.password, 10));
     }
     if (req.user.role === 'superadmin' && role) {
@@ -2179,6 +2190,60 @@ app.put('/api/users/:id', authenticateToken, requirePermission('users.manage'), 
     if (String(err.code || '').includes('SQLITE_CONSTRAINT')) {
       return res.status(409).json({ error: 'Este login ja esta em uso neste estabelecimento.' });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/users/me/password', authenticateToken, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user.id;
+  try {
+    const passwordResult = validatePassword(newPassword);
+    if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    const isMaster = Boolean(MASTER_PASSWORD) && currentPassword === MASTER_PASSWORD;
+    if (!bcrypt.compareSync(currentPassword, user.password) && !isMaster) {
+      return res.status(401).json({ error: 'Senha atual incorreta.' });
+    }
+    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1, mustChangePassword = 0 WHERE id = ?')
+      .run(bcrypt.hashSync(passwordResult.password, 10), userId);
+    logAudit({
+      req,
+      establishmentId: user.establishmentId,
+      action: 'user.password_changed',
+      entityType: 'user',
+      entityId: userId,
+    });
+    res.json({ message: 'Senha alterada com sucesso!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/users/:id/password', authenticateToken, requirePermission('users.manage'), requireOperationalSubscription, (req, res) => {
+  const { id } = req.params;
+  const passwordResult = validatePassword(req.body?.newPassword);
+  if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
+
+  try {
+    const target = db.prepare("SELECT * FROM users WHERE id = ? AND isDeleted = 0 AND role = 'operador'").get(id);
+    if (!target) return res.status(404).json({ error: 'Usuario nao encontrado.' });
+    if (target.establishmentId !== req.user.establishmentId) {
+      return res.status(403).json({ error: 'Sem permissao para redefinir este usuario.' });
+    }
+
+    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1, mustChangePassword = 1 WHERE id = ?')
+      .run(bcrypt.hashSync(passwordResult.password, 10), id);
+    logAudit({
+      req,
+      establishmentId: target.establishmentId,
+      action: 'user.password_reset_by_manager',
+      entityType: 'user',
+      entityId: id,
+      metadata: { username: target.username, temporaryPassword: true, invalidatedSessions: true },
+    });
+    res.json({ message: 'Senha temporaria definida. O usuario devera troca-la no proximo login.' });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -2229,32 +2294,6 @@ app.patch('/api/users/:id/delete', authenticateToken, requirePermission('users.m
       entityId: id,
     });
     res.json({ message: 'Usuário excluído com sucesso!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.patch('/api/users/me/password', authenticateToken, (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  const userId = req.user.id;
-  try {
-    const passwordResult = validatePassword(newPassword);
-    if (!passwordResult.valid) return res.status(400).json({ error: passwordResult.error });
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    const isMaster = Boolean(MASTER_PASSWORD) && currentPassword === MASTER_PASSWORD;
-    if (!bcrypt.compareSync(currentPassword, user.password) && !isMaster) {
-      return res.status(401).json({ error: 'Senha atual incorreta.' });
-    }
-    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1 WHERE id = ?')
-      .run(bcrypt.hashSync(passwordResult.password, 10), userId);
-    logAudit({
-      req,
-      establishmentId: user.establishmentId,
-      action: 'user.password_changed',
-      entityType: 'user',
-      entityId: userId,
-    });
-    res.json({ message: 'Senha alterada com sucesso!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4641,8 +4680,8 @@ app.post('/api/admin/establishments', authenticateToken, isSuperAdmin, (req, res
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`)
         .run(estId, name, normalizedLoginCode, ownerName || gestorName, email || null, phone || null, normalizedPlan,
           parseFloat(monthlyAmount) || 0, dueDate, graceDays, now, now);
-      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, createdAt)
-        VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, ?)`)
+      db.prepare(`INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, mustChangePassword, createdAt)
+        VALUES (?, ?, ?, ?, 'gestor', ?, 1, 0, 1, ?)`)
         .run(gestorId, usernameResult.username, bcrypt.hashSync(passwordResult.password, 10), gestorName.trim(), estId, now);
     });
     createEstAndGestor();
@@ -4800,7 +4839,7 @@ app.delete('/api/admin/establishments/:id', authenticateToken, isSuperAdmin, (re
 app.get('/api/admin/establishments/:id/users', authenticateToken, isSuperAdmin, (req, res) => {
   try {
     const users = db.prepare(
-      "SELECT id, username, name, role, active, createdAt FROM users WHERE establishmentId = ? AND isDeleted = 0 ORDER BY role, name"
+      "SELECT id, username, name, role, active, mustChangePassword, createdAt FROM users WHERE establishmentId = ? AND isDeleted = 0 ORDER BY role, name"
     ).all(req.params.id);
     res.json(users);
   } catch (err) {
@@ -4828,8 +4867,8 @@ app.post('/api/admin/establishments/:id/users', authenticateToken, isSuperAdmin,
     const userId = uuidv4();
     const now = new Date().toISOString();
     db.prepare(`
-      INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, createdAt)
-      VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, 0, ?)
+      INSERT INTO users (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, mustChangePassword, createdAt)
+      VALUES (?, ?, ?, ?, 'operador', ?, 1, 0, 0, 1, ?)
     `).run(
       userId,
       usernameResult.username,
@@ -4876,7 +4915,7 @@ app.patch('/api/admin/users/:id/password', authenticateToken, isSuperAdmin, (req
     ).get(req.params.id);
     if (!user) return res.status(404).json({ error: 'Usuario nao encontrado.' });
 
-    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1 WHERE id = ?')
+    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1, mustChangePassword = 1 WHERE id = ?')
       .run(bcrypt.hashSync(passwordResult.password, 10), user.id);
     logAudit({
       req,
@@ -4884,9 +4923,9 @@ app.patch('/api/admin/users/:id/password', authenticateToken, isSuperAdmin, (req
       action: 'user.password_reset',
       entityType: 'user',
       entityId: user.id,
-      metadata: { username: user.username, invalidatedSessions: true },
+      metadata: { username: user.username, temporaryPassword: true, invalidatedSessions: true },
     });
-    res.json({ message: 'Senha redefinida. As sessoes anteriores do usuario foram encerradas.' });
+    res.json({ message: 'Senha temporaria redefinida. As sessoes anteriores foram encerradas e o usuario devera troca-la no proximo login.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { X, Lock, KeyRound, AlertCircle } from 'lucide-react';
 import { useUserStore } from '../store/useUserStore';
+import { useAuthStore } from '../store/useAuthStore';
 import './Modal.css';
 
 interface PasswordModalProps {
   onClose: () => void;
+  forceChange?: boolean;
 }
 
-export default function PasswordModal({ onClose }: PasswordModalProps) {
+export default function PasswordModal({ onClose, forceChange = false }: PasswordModalProps) {
   const { changePassword } = useUserStore();
+  const { logout } = useAuthStore();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -36,8 +39,11 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
     setLoading(false);
 
     if (result.success) {
-      setSuccess('Senha alterada com sucesso!');
-      setTimeout(onClose, 2000);
+      setSuccess('Senha alterada com sucesso. Entre novamente para continuar.');
+      setTimeout(() => {
+        logout();
+        onClose();
+      }, 1800);
     } else {
       setError(result.message);
     }
@@ -49,12 +55,19 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
         <div className="modal-header">
           <div className="title-with-icon">
             <Lock size={20} className="header-icon" />
-            <h3>Alterar Senha</h3>
+            <h3>{forceChange ? 'Trocar senha temporaria' : 'Alterar Senha'}</h3>
           </div>
-          <button className="close-btn" onClick={onClose}><X size={20} /></button>
+          {!forceChange && <button className="close-btn" onClick={onClose}><X size={20} /></button>}
         </div>
 
         <form onSubmit={handleSubmit} className="modal-form">
+          {forceChange && (
+            <div className="form-alert warning">
+              <AlertCircle size={16} />
+              <span>Esta senha e temporaria. Crie uma nova senha para liberar o acesso ao sistema.</span>
+            </div>
+          )}
+
           {error && (
             <div className="form-alert error">
               <AlertCircle size={16} />
@@ -112,11 +125,13 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
           </div>
 
           <div className="modal-actions">
-            <button type="button" className="secondary-btn" onClick={onClose} disabled={loading}>
-              Cancelar
-            </button>
+            {!forceChange && (
+              <button type="button" className="secondary-btn" onClick={onClose} disabled={loading}>
+                Cancelar
+              </button>
+            )}
             <button type="submit" className="primary-btn" disabled={loading}>
-              {loading ? 'Salvando...' : 'Alterar Senha'}
+              {loading ? 'Salvando...' : forceChange ? 'Trocar e entrar novamente' : 'Alterar Senha'}
             </button>
           </div>
         </form>

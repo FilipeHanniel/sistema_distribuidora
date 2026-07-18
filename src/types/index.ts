@@ -45,6 +45,7 @@ export interface User {
   name: string;
   role: UserRole;
   active: number;
+  mustChangePassword?: boolean | number;
   establishmentId?: string;
   createdAt: string;
 }

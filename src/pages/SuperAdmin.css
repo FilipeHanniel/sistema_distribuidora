@@ -1069,6 +1069,26 @@
 .btn-icon { width: 2rem; height: 2rem; padding: 0; justify-content: center; flex: 0 0 2rem; }
 .est-users-list  { display: flex; flex-direction: column; gap: 0.6rem; }
 
+.user-form-hint {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 0.75rem;
+  color: #92400e;
+  font-size: 0.82rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.85rem;
+}
+
+.est-user-temp-password {
+  background: #fef3c7;
+  border-radius: 999px;
+  color: #92400e;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.25rem 0.55rem;
+  white-space: nowrap;
+}
+
 .est-user-row {
   display: flex; align-items: center; gap: 0.875rem;
   padding: 0.625rem 0.875rem;

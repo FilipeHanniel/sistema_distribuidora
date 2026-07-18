@@ -14,12 +14,14 @@ interface AuthUser {
   name: string;
   establishmentId: string | null;
   establishmentName?: string | null;
+  mustChangePassword?: boolean;
 }
 
 interface AuthState {
   user: AuthUser | null;
   token: string | null;
   login: (user: AuthUser, token: string) => void;
+  markPasswordChanged: () => void;
   updateEstablishmentName: (name: string) => void;
   logout: () => void;
   isAuthenticated: () => boolean;
@@ -35,6 +37,9 @@ export const useAuthStore = create<AuthState>()(
       token: null,
 
       login: (user, token) => set({ user, token }),
+      markPasswordChanged: () => set(state => ({
+        user: state.user ? { ...state.user, mustChangePassword: false } : null,
+      })),
       updateEstablishmentName: (name) => set(state => ({
         user: state.user ? { ...state.user, establishmentName: name } : null,
       })),

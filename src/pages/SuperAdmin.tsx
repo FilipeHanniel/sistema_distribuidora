@@ -95,7 +95,7 @@ interface BusinessInsights {
   bottomFive: BusinessInsight[];
 }
 
-interface EstUser { id: string; username: string; name: string; role: string; active: number; }
+interface EstUser { id: string; username: string; name: string; role: string; active: number; mustChangePassword?: boolean | number; }
 
 interface Payment {
   id: string; establishmentId: string; amount: number;
@@ -510,6 +510,7 @@ export default function SuperAdmin() {
     'user.updated': 'Usuario atualizado',
     'user.updated_with_password': 'Usuario e senha atualizados',
     'user.password_reset': 'Senha redefinida pelo SuperAdmin',
+    'user.password_reset_by_manager': 'Senha redefinida pelo gestor',
     'settings.updated': 'Configuracoes do estabelecimento atualizadas',
     'user.activated': 'Usuario ativado',
     'user.deactivated': 'Usuario desativado',
@@ -1328,6 +1329,9 @@ export default function SuperAdmin() {
               {userFormMode === 'create' ? 'Novo funcionario' : `Redefinir senha de ${userForm.name}`}
             </div>
             {userFormError && <div className="user-form-error">{userFormError}</div>}
+            <div className="user-form-hint">
+              A senha informada e temporaria. O usuario precisara troca-la no proximo login.
+            </div>
             {userFormMode === 'create' && (
               <div className="form-row">
                 <div className="form-group">
@@ -1372,6 +1376,9 @@ export default function SuperAdmin() {
               <span style={{ fontSize: '0.75rem', color: u.active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
                 {u.active ? 'Ativo' : 'Inativo'}
               </span>
+              {Number(u.mustChangePassword || 0) === 1 && (
+                <span className="est-user-temp-password">Senha temporaria</span>
+              )}
               <button className="btn btn-secondary btn-icon btn-sm" type="button"
                 onClick={() => openPasswordReset(u)} title="Redefinir senha" aria-label={`Redefinir senha de ${u.name}`}>
                 <KeyRound size={14} />

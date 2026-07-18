@@ -119,6 +119,7 @@ export default function AppLayout() {
 
   const superAdmin = isSuperAdmin();
   const gestor = isGestor();
+  const mustChangePassword = Boolean(user?.mustChangePassword);
   const canManageNotifications = hasRolePermission(user?.role, 'notifications.manage');
   const canManageProducts = hasRolePermission(user?.role, 'products.manage');
   const canManagePurchases = hasRolePermission(user?.role, 'purchases.manage');
@@ -137,7 +138,7 @@ export default function AppLayout() {
     setNotifications([]);
     setTenantStatus(null);
 
-    if (!isAuthenticated()) return;
+    if (!isAuthenticated() || mustChangePassword) return;
 
     if (!superAdmin) {
       fetchProducts();
@@ -160,6 +161,7 @@ export default function AppLayout() {
     isAuthenticated,
     superAdmin,
     gestor,
+    mustChangePassword,
   ]);
 
   useEffect(() => {
@@ -186,7 +188,7 @@ export default function AppLayout() {
   }, []);
 
   const loadNotifications = useCallback(async (sync = false) => {
-    if (!canManageNotifications || !isAuthenticated()) return;
+    if (!canManageNotifications || !isAuthenticated() || mustChangePassword) return;
     try {
       if (sync) await apiRequest('/notifications/sync', { method: 'POST' });
       const rows = await apiRequest<AppNotification[]>('/notifications');
@@ -194,17 +196,17 @@ export default function AppLayout() {
     } catch {
       setNotifications([]);
     }
-  }, [canManageNotifications, isAuthenticated]);
+  }, [canManageNotifications, isAuthenticated, mustChangePassword]);
 
   useEffect(() => {
-    if (!canManageNotifications || !isAuthenticated()) return;
+    if (!canManageNotifications || !isAuthenticated() || mustChangePassword) return;
     loadNotifications();
     const timer = window.setInterval(loadNotifications, 60000);
     return () => window.clearInterval(timer);
-  }, [canManageNotifications, isAuthenticated, loadNotifications]);
+  }, [canManageNotifications, isAuthenticated, mustChangePassword, loadNotifications]);
 
   useEffect(() => {
-    if (superAdmin || !isAuthenticated()) return;
+    if (superAdmin || !isAuthenticated() || mustChangePassword) return;
     const loadTenantStatus = () => {
       apiRequest<TenantStatus>('/tenant/status')
         .then(setTenantStatus)
@@ -213,7 +215,7 @@ export default function AppLayout() {
     loadTenantStatus();
     const timer = window.setInterval(loadTenantStatus, 60000);
     return () => window.clearInterval(timer);
-  }, [user?.id, superAdmin, isAuthenticated]);
+  }, [user?.id, superAdmin, isAuthenticated, mustChangePassword]);
 
   useEffect(() => {
     if (!isAuthenticated()) return;
@@ -224,6 +226,14 @@ export default function AppLayout() {
     const timer = window.setInterval(validateSession, 30000);
     return () => window.clearInterval(timer);
   }, [user?.id, isAuthenticated]);
+
+  useEffect(() => {
+    if (mustChangePassword) {
+      setIsPasswordModalOpen(true);
+      setIsUserMenuOpen(false);
+      setIsNotificationsOpen(false);
+    }
+  }, [mustChangePassword]);
 
   if (!isAuthenticated()) return <Login />;
 
@@ -502,7 +512,12 @@ export default function AppLayout() {
           </div>
         </main>
 
-        {isPasswordModalOpen && <PasswordModal onClose={() => setIsPasswordModalOpen(false)} />}
+        {isPasswordModalOpen && (
+          <PasswordModal
+            onClose={() => setIsPasswordModalOpen(false)}
+            forceChange={mustChangePassword}
+          />
+        )}
 
         {showSuccessPopup && lastSale && (
           <SaleSuccessPopup

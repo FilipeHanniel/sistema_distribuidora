@@ -45,6 +45,7 @@ const initDB = () => {
       active INTEGER DEFAULT 1,
       isDeleted INTEGER DEFAULT 0,
       authVersion INTEGER DEFAULT 0,
+      mustChangePassword INTEGER DEFAULT 0,
       createdAt TEXT
     )
   `).run();
@@ -373,6 +374,7 @@ const initDB = () => {
     'ALTER TABLE users ADD COLUMN isDeleted INTEGER DEFAULT 0',
     'ALTER TABLE users ADD COLUMN establishmentId TEXT',
     'ALTER TABLE users ADD COLUMN authVersion INTEGER DEFAULT 0',
+    'ALTER TABLE users ADD COLUMN mustChangePassword INTEGER DEFAULT 0',
     'ALTER TABLE products ADD COLUMN establishmentId TEXT',
     'ALTER TABLE products ADD COLUMN ncm TEXT',
     'ALTER TABLE products ADD COLUMN cfop TEXT',
@@ -436,11 +438,12 @@ const initDB = () => {
           active INTEGER DEFAULT 1,
           isDeleted INTEGER DEFAULT 0,
           authVersion INTEGER DEFAULT 0,
+          mustChangePassword INTEGER DEFAULT 0,
           createdAt TEXT
         );
-        INSERT INTO users_new (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, createdAt)
+        INSERT INTO users_new (id, username, password, name, role, establishmentId, active, isDeleted, authVersion, mustChangePassword, createdAt)
           SELECT id, username, password, name, role, establishmentId,
-            COALESCE(active, 1), COALESCE(isDeleted, 0), COALESCE(authVersion, 0), createdAt
+            COALESCE(active, 1), COALESCE(isDeleted, 0), COALESCE(authVersion, 0), COALESCE(mustChangePassword, 0), createdAt
           FROM users;
         DROP TABLE users;
         ALTER TABLE users_new RENAME TO users;

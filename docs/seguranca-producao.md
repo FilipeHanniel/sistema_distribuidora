@@ -4,6 +4,8 @@ Este checklist registra os controles minimos antes de operar clientes reais.
 
 Documento complementar: [LGPD basica para o sistema](lgpd-basica.md).
 
+Documento complementar: [Politica de senhas e recuperacao](politica-senhas-recuperacao.md).
+
 ## Variaveis obrigatorias
 
 - `NODE_ENV=production`
@@ -35,6 +37,7 @@ proxy_set_header X-Forwarded-Proto $scheme;
 - Tokens expiram automaticamente.
 - Reinicio/deploy invalida sessoes antigas.
 - Redefinicao ou troca de senha incrementa `authVersion` e invalida tokens anteriores.
+- Senhas temporarias exigem troca no proximo login e bloqueiam operacoes ate a troca.
 - Senhas novas precisam ter 8 a 128 caracteres, com letras e numeros.
 
 ## Logs

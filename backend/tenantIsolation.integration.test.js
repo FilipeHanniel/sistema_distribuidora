@@ -329,6 +329,60 @@ test('invalida sessao antiga apos troca da propria senha', async () => {
   assert.equal(newLogin.status, 200);
 });
 
+test('exige troca apos reset administrativo de senha temporaria', async () => {
+  const resetNow = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO users (
+      id, username, password, name, role, establishmentId, active, isDeleted, authVersion, mustChangePassword, createdAt
+    ) VALUES ('temp-reset-user-a', 'temporario', ?, 'Usuario Temporario', 'operador', 'est-a', 1, 0, 0, 0, ?)
+  `).run(bcrypt.hashSync('senha-antiga-123', 4), resetNow);
+
+  const firstLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'temporario', password: 'senha-antiga-123' },
+  });
+  assert.equal(firstLogin.status, 200);
+  assert.equal(firstLogin.payload.user.mustChangePassword, false);
+
+  const reset = await request('/api/users/temp-reset-user-a/password', {
+    token: tokenA,
+    method: 'PATCH',
+    body: { newPassword: 'senha-temp-456' },
+  });
+  assert.equal(reset.status, 200);
+
+  const oldSession = await request('/api/session', { token: firstLogin.payload.token });
+  assert.equal(oldSession.status, 401);
+
+  const temporaryLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'temporario', password: 'senha-temp-456' },
+  });
+  assert.equal(temporaryLogin.status, 200);
+  assert.equal(temporaryLogin.payload.user.mustChangePassword, true);
+
+  const blocked = await request('/api/products', { token: temporaryLogin.payload.token });
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.payload.code, 'password_change_required');
+
+  const changed = await request('/api/users/me/password', {
+    token: temporaryLogin.payload.token,
+    method: 'PATCH',
+    body: { currentPassword: 'senha-temp-456', newPassword: 'senha-definitiva-789' },
+  });
+  assert.equal(changed.status, 200);
+
+  const temporarySession = await request('/api/session', { token: temporaryLogin.payload.token });
+  assert.equal(temporarySession.status, 401);
+
+  const finalLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'temporario', password: 'senha-definitiva-789' },
+  });
+  assert.equal(finalLogin.status, 200);
+  assert.equal(finalLogin.payload.user.mustChangePassword, false);
+});
+
 test('permite cadastro rapido pelo operador e restringe codigo duplicado ao tenant', async () => {
   const operatorLogin = await request('/api/login', {
     method: 'POST',

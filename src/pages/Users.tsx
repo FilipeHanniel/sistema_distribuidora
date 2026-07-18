@@ -1,16 +1,31 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { Plus, Search, UserPlus, User as UserIcon, Edit2, Trash2, Power, PowerOff, ShieldCheck } from 'lucide-react';
+import {
+  Plus, Search, UserPlus, User as UserIcon, Edit2, Trash2,
+  Power, PowerOff, ShieldCheck, KeyRound,
+} from 'lucide-react';
 import { useUserStore } from '../store/useUserStore';
 import { apiRequest } from '../lib/api';
 import type { User } from '../types';
 import Modal from '../components/Modal';
 import './Users.css';
 
+const isValidPassword = (value: string) => value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
+
 export default function Users() {
-  const { users, fetchUsers, createUser, updateUser, toggleUserStatus, deleteUser } = useUserStore();
+  const {
+    users,
+    fetchUsers,
+    createUser,
+    updateUser,
+    resetUserPassword,
+    toggleUserStatus,
+    deleteUser,
+  } = useUserStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [passwordUser, setPasswordUser] = useState<User | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState('');
   const [maxOperators, setMaxOperators] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
@@ -42,22 +57,47 @@ export default function Users() {
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => { setIsModalOpen(false); setEditingUser(null); };
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingUser(null);
+  };
+
+  const handleClosePasswordModal = () => {
+    setPasswordUser(null);
+    setTemporaryPassword('');
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     let success = false;
     if (editingUser) {
-      success = await updateUser(editingUser.id, formData);
+      success = await updateUser(editingUser.id, {
+        username: formData.username,
+        name: formData.name,
+      });
     } else {
-      if (!formData.password) { alert('A senha é obrigatória para novos funcionários.'); return; }
-      if (formData.password.length < 8 || !/[A-Za-z]/.test(formData.password) || !/\d/.test(formData.password)) {
+      if (!formData.password) {
+        alert('A senha temporaria e obrigatoria para novos funcionarios.');
+        return;
+      }
+      if (!isValidPassword(formData.password)) {
         alert('A senha deve possuir pelo menos 8 caracteres, com letras e numeros.');
         return;
       }
       success = await createUser({ ...formData, role: 'operador' });
     }
     if (success) handleCloseModal();
+  };
+
+  const handlePasswordReset = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!passwordUser) return;
+    if (!isValidPassword(temporaryPassword)) {
+      alert('A senha temporaria deve possuir pelo menos 8 caracteres, com letras e numeros.');
+      return;
+    }
+    const success = await resetUserPassword(passwordUser.id, temporaryPassword);
+    if (success) handleClosePasswordModal();
   };
 
   const filteredUsers = operadores.filter(u =>
@@ -69,25 +109,24 @@ export default function Users() {
     <div className="page-container users-page">
       <div className="page-header">
         <div className="header-info">
-          <h1>Funcionários</h1>
-          <p className="subtitle">Cadastre e gerencie operadores do ponto de venda — limite do plano: {maxOperatorsLabel}</p>
+          <h1>Funcionarios</h1>
+          <p className="subtitle">Cadastre e gerencie operadores do ponto de venda - limite do plano: {maxOperatorsLabel}</p>
         </div>
         <button
           className="btn btn-primary"
           onClick={() => handleOpenModal()}
           disabled={atLimit}
-          title={atLimit ? `Limite de ${maxOperatorsLabel} funcionários atingido` : 'Novo funcionário'}
+          title={atLimit ? `Limite de ${maxOperatorsLabel} funcionarios atingido` : 'Novo funcionario'}
         >
-          <Plus size={18} /> Novo Funcionário
+          <Plus size={18} /> Novo Funcionario
         </button>
       </div>
 
-      {/* Contadores */}
       <div className="widgets-grid">
         <div className="widget-card">
           <div className="widget-icon"><UserPlus size={20} /></div>
           <div className="widget-content">
-            <span className="widget-title">Funcionários Cadastrados</span>
+            <span className="widget-title">Funcionarios Cadastrados</span>
             <span className="widget-value">
               {operadores.length} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>/ {maxOperatorsLabel}</span>
             </span>
@@ -105,22 +144,18 @@ export default function Users() {
             <ShieldCheck size={20} />
           </div>
           <div className="widget-content">
-            <span className="widget-title">Vagas Disponíveis</span>
+            <span className="widget-title">Vagas Disponiveis</span>
             <span className="widget-value" style={{ color: atLimit ? '#dc2626' : undefined }}>
-              {maxOperators === null ? '∞' : Math.max(0, maxOperators - operadores.length)}
+              {maxOperators === null ? 'Ilimitado' : Math.max(0, maxOperators - operadores.length)}
             </span>
           </div>
         </div>
       </div>
 
       {atLimit && (
-        <div style={{
-          background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: '1rem',
-          padding: '0.875rem 1.25rem', marginBottom: '1.5rem', fontSize: '0.875rem',
-          color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem',
-        }}>
+        <div className="users-warning">
           <UserPlus size={16} />
-          Você atingiu o limite de {maxOperatorsLabel} funcionários. Exclua um para cadastrar outro.
+          Voce atingiu o limite de {maxOperatorsLabel} funcionarios. Exclua um para cadastrar outro.
         </div>
       )}
 
@@ -140,10 +175,10 @@ export default function Users() {
         <table className="users-table">
           <thead>
             <tr>
-              <th>Funcionário</th>
+              <th>Funcionario</th>
               <th>Login</th>
               <th>Status</th>
-              <th className="text-right">Ações</th>
+              <th className="text-right">Acoes</th>
             </tr>
           </thead>
           <tbody>
@@ -160,6 +195,9 @@ export default function Users() {
                   <span className={`status-badge ${user.active === 1 ? 'active' : 'inactive'}`}>
                     {user.active === 1 ? 'Ativo' : 'Desativado'}
                   </span>
+                  {Number(user.mustChangePassword || 0) === 1 && (
+                    <span className="status-badge temporary-password">Senha temporaria</span>
+                  )}
                 </td>
                 <td className="text-right actions-cell">
                   <button
@@ -172,6 +210,13 @@ export default function Users() {
                   <button className="action-btn edit" title="Editar" onClick={() => handleOpenModal(user)}>
                     <Edit2 size={18} />
                   </button>
+                  <button
+                    className="action-btn reset"
+                    title="Redefinir senha"
+                    onClick={() => { setPasswordUser(user); setTemporaryPassword(''); }}
+                  >
+                    <KeyRound size={18} />
+                  </button>
                   <button className="action-btn delete" title="Excluir" onClick={() => deleteUser(user.id)}>
                     <Trash2 size={18} />
                   </button>
@@ -180,7 +225,7 @@ export default function Users() {
             )) : (
               <tr>
                 <td colSpan={4} className="empty-state">
-                  {operadores.length === 0 ? 'Nenhum funcionário cadastrado ainda.' : 'Nenhum resultado encontrado.'}
+                  {operadores.length === 0 ? 'Nenhum funcionario cadastrado ainda.' : 'Nenhum resultado encontrado.'}
                 </td>
               </tr>
             )}
@@ -191,38 +236,84 @@ export default function Users() {
       <Modal
         isOpen={isModalOpen}
         onClose={handleCloseModal}
-        title={editingUser ? 'Editar Funcionário' : 'Novo Funcionário (Operador)'}
+        title={editingUser ? 'Editar Funcionario' : 'Novo Funcionario (Operador)'}
       >
         <form onSubmit={handleSubmit} className="user-form">
           <div className="form-group">
             <label>Nome Completo</label>
-            <input type="text" className="form-control" value={formData.name}
+            <input
+              type="text"
+              className="form-control"
+              value={formData.name}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
-              required placeholder="Ex: João Silva" />
+              required
+              placeholder="Ex: Joao Silva"
+            />
           </div>
           <div className="form-row">
             <div className="form-group">
               <label>Login de Acesso</label>
-              <input type="text" className="form-control" value={formData.username}
+              <input
+                type="text"
+                className="form-control"
+                value={formData.username}
                 onChange={e => setFormData({ ...formData, username: e.target.value })}
-                required placeholder="Ex: joao.silva" />
+                required
+                placeholder="Ex: joao.silva"
+              />
             </div>
-            <div className="form-group">
-              <label>{editingUser ? 'Nova Senha (opcional)' : 'Senha de Acesso'}</label>
-              <input type="password" className="form-control" value={formData.password}
-                minLength={editingUser ? undefined : 8}
-                onChange={e => setFormData({ ...formData, password: e.target.value })}
-                required={!editingUser} placeholder={editingUser ? '••••••••' : 'Senha'} />
-            </div>
+            {!editingUser && (
+              <div className="form-group">
+                <label>Senha temporaria</label>
+                <input
+                  type="password"
+                  className="form-control"
+                  value={formData.password}
+                  minLength={8}
+                  autoComplete="new-password"
+                  onChange={e => setFormData({ ...formData, password: e.target.value })}
+                  required
+                  placeholder="Senha"
+                />
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-main)', padding: '0.75rem', borderRadius: '0.5rem' }}>
-            Este funcionário terá acesso ao <strong>Ponto de Venda</strong> e <strong>Comprovantes do dia</strong>.
+          <div className="user-form-note">
+            Este funcionario tera acesso ao <strong>Ponto de Venda</strong> e <strong>Comprovantes do dia</strong>.
+            Senhas temporarias precisam ser trocadas no primeiro login.
           </div>
           <div className="form-actions">
             <button type="button" className="btn btn-secondary" onClick={handleCloseModal}>Cancelar</button>
             <button type="submit" className="btn btn-primary">
-              {editingUser ? 'Salvar Alterações' : 'Cadastrar Funcionário'}
+              {editingUser ? 'Salvar Alteracoes' : 'Cadastrar Funcionario'}
             </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(passwordUser)}
+        onClose={handleClosePasswordModal}
+        title={passwordUser ? `Redefinir senha de ${passwordUser.name}` : 'Redefinir senha'}
+      >
+        <form onSubmit={handlePasswordReset} className="user-form">
+          <div className="form-group">
+            <label>Nova senha temporaria</label>
+            <input
+              type="password"
+              className="form-control"
+              value={temporaryPassword}
+              minLength={8}
+              autoComplete="new-password"
+              onChange={e => setTemporaryPassword(e.target.value)}
+              required
+              placeholder="Minimo 8 caracteres, letras e numeros"
+            />
+            <small>O operador devera trocar esta senha no proximo login.</small>
+          </div>
+          <div className="form-actions">
+            <button type="button" className="btn btn-secondary" onClick={handleClosePasswordModal}>Cancelar</button>
+            <button type="submit" className="btn btn-primary">Redefinir senha</button>
           </div>
         </form>
       </Modal>
