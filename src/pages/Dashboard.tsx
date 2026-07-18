@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { Brain, AlertTriangle, Clock, TrendingDown, PackageCheck, ArrowUpCircle, FileText, CalendarDays, Lightbulb, ListChecks, Target, CircleDot, BarChart3, CreditCard, Boxes } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../store/useAuthStore';
@@ -17,6 +18,7 @@ interface StockPrediction {
 }
 
 interface AiReport {
+  available?: true;
   id: string;
   periodType: 'daily' | 'weekly';
   periodStart: string;
@@ -34,6 +36,16 @@ interface AiReport {
     lowStock?: { name: string; stock: number; category: string; soldLast90d?: number }[];
   };
 }
+
+interface AiReportUnavailable {
+  available: false;
+  periodType: 'daily' | 'weekly';
+  periodStart: string;
+  periodEnd: string;
+  message?: string;
+}
+
+type AiReportResponse = AiReport | AiReportUnavailable;
 
 type ReportBlock = {
   title: string;
@@ -119,6 +131,10 @@ function renderInlineStrong(text: string) {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0));
+}
+
+function isAiReportAvailable(report: AiReportResponse): report is AiReport {
+  return report.available !== false && 'content' in report;
 }
 
 function growthLabel(current: number, previous: number) {
@@ -223,6 +239,8 @@ export default function Dashboard() {
   const [predictions, setPredictions] = useState<StockPrediction[]>([]);
   const [dailyReport, setDailyReport] = useState<AiReport | null>(null);
   const [weeklyReport, setWeeklyReport] = useState<AiReport | null>(null);
+  const [dailyReportMessage, setDailyReportMessage] = useState('');
+  const [weeklyReportMessage, setWeeklyReportMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [reportLoading, setReportLoading] = useState(false);
   const { user } = useAuthStore();
@@ -237,11 +255,23 @@ export default function Dashboard() {
 
       if (isGestor) {
         setReportLoading(true);
-        const daily = await apiRequest<AiReport>('/ai/reports?period=daily');
-        setDailyReport(daily);
+        const daily = await apiRequest<AiReportResponse>('/ai/reports?period=daily');
+        if (isAiReportAvailable(daily)) {
+          setDailyReport(daily);
+          setDailyReportMessage('');
+        } else {
+          setDailyReport(null);
+          setDailyReportMessage(daily.message || 'Relatorio programado ainda nao foi gerado.');
+        }
         if (isMonday) {
-          const weekly = await apiRequest<AiReport>('/ai/reports?period=weekly');
-          setWeeklyReport(weekly);
+          const weekly = await apiRequest<AiReportResponse>('/ai/reports?period=weekly');
+          if (isAiReportAvailable(weekly)) {
+            setWeeklyReport(weekly);
+            setWeeklyReportMessage('');
+          } else {
+            setWeeklyReport(null);
+            setWeeklyReportMessage(weekly.message || 'Relatorio semanal programado ainda nao foi gerado.');
+          }
         }
       }
     } catch (err) {
@@ -389,9 +419,14 @@ export default function Dashboard() {
             <div className="ai-report-header">
               <div>
                 <h2><FileText size={20} /> Relatorio inteligente diario</h2>
-                <p>Gerado uma vez por dia com base nas vendas, produtos e estoque do estabelecimento.</p>
+                <p>Gerado uma vez por dia, de madrugada, com vendas, produtos, estoque, margem e operacao.</p>
               </div>
-              {reportLoading && <span className="ai-report-loading">Gerando analise...</span>}
+              <div className="ai-report-actions">
+                <Link className="btn btn-secondary ai-report-link" to="/analytics">
+                  <BarChart3 size={16} /> Ver relatorios operacionais
+                </Link>
+                {reportLoading && <span className="ai-report-loading">Carregando relatorio...</span>}
+              </div>
             </div>
 
             {dailyReport && (
@@ -405,6 +440,16 @@ export default function Dashboard() {
               </div>
             )}
 
+            {!reportLoading && !dailyReport && (
+              <div className="ai-report-empty-card">
+                <Clock size={18} />
+                <div>
+                  <strong>Relatorio diario ainda nao disponivel</strong>
+                  <p>{dailyReportMessage || 'A proxima analise sera gerada automaticamente no horario programado.'}</p>
+                </div>
+              </div>
+            )}
+
             {isMonday && weeklyReport && (
               <div className="ai-report-card weekly">
                 <div className="ai-report-meta">
@@ -413,6 +458,16 @@ export default function Dashboard() {
                 </div>
                 <AiReportMetricStrip report={weeklyReport} />
                 <AiReportContent content={weeklyReport.content} />
+              </div>
+            )}
+
+            {isMonday && !reportLoading && !weeklyReport && (
+              <div className="ai-report-empty-card weekly">
+                <CalendarDays size={18} />
+                <div>
+                  <strong>Relatorio semanal ainda nao disponivel</strong>
+                  <p>{weeklyReportMessage || 'A analise semanal sera publicada quando a rotina programada concluir.'}</p>
+                </div>
               </div>
             )}
           </section>

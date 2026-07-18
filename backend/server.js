@@ -79,6 +79,7 @@ const {
   normalizeGraceDays,
 } = require('./subscriptionPolicy');
 const { buildOnboardingStatus } = require('./onboardingPolicy');
+const { buildInventoryReport } = require('./inventoryReportService');
 const {
   InventoryError,
   cancelPurchase,
@@ -87,7 +88,6 @@ const {
   normalizeSupplierPayload,
   receivePurchase,
 } = require('./inventoryService');
-const { buildInventoryReport } = require('./inventoryReportService');
 const {
   ProductPolicyError,
   normalizeBarcode,
@@ -1203,7 +1203,48 @@ const getReportWindow = (periodType) => {
   return { start: yesterday, end: today };
 };
 
-const collectAiReportMetrics = (estId, startIso, endIso) => {
+const parseAiReportRow = (row) => {
+  if (!row) return null;
+  return {
+    ...row,
+    metrics: JSON.parse(row.metrics || '{}'),
+    cached: true,
+    available: true,
+  };
+};
+
+const getCachedAiReport = ({ estId, periodType }) => {
+  const { start, end } = getReportWindow(periodType);
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+  const cached = db.prepare(
+    'SELECT * FROM ai_reports WHERE establishmentId = ? AND periodType = ? AND periodStart = ?'
+  ).get(estId, periodType, startIso);
+
+  const parsed = parseAiReportRow(cached);
+  if (parsed) return parsed;
+
+  return {
+    available: false,
+    establishmentId: estId,
+    periodType,
+    periodStart: startIso,
+    periodEnd: endIso,
+    message: periodType === 'weekly'
+      ? 'Relatorio semanal programado ainda nao foi gerado.'
+      : 'Relatorio diario programado ainda nao foi gerado.',
+  };
+};
+
+const calculateGrowthPct = (current, previous) => {
+  const currentValue = Number(current || 0);
+  const previousValue = Number(previous || 0);
+  if (!previousValue && !currentValue) return 0;
+  if (!previousValue) return 100;
+  return Math.round((((currentValue - previousValue) / previousValue) * 100) * 10) / 10;
+};
+
+const collectAiReportMetrics = (estId, startIso, endIso, periodType = 'daily') => {
   const sales = db.prepare(`
     SELECT id, totalAmount, paymentMethod, createdAt
     FROM sales
@@ -1245,6 +1286,33 @@ const collectAiReportMetrics = (estId, startIso, endIso) => {
     ORDER BY revenue DESC
   `).all(estId, startIso, endIso);
 
+  const categorySales = db.prepare(`
+    SELECT COALESCE(p.category, 'Geral') as category, SUM(si.quantity) as quantity, COALESCE(SUM(si.totalPrice), 0) as revenue
+    FROM sale_items si
+    INNER JOIN sales s ON s.id = si.saleId
+    LEFT JOIN products p ON p.id = si.productId AND p.establishmentId = s.establishmentId
+    WHERE s.establishmentId = ? AND s.createdAt >= ? AND s.createdAt < ?
+    GROUP BY COALESCE(p.category, 'Geral')
+    ORDER BY revenue DESC, quantity DESC
+    LIMIT 8
+  `).all(estId, startIso, endIso);
+
+  const paymentHealth = db.prepare(`
+    SELECT status, paymentMethod, COUNT(*) as count, COALESCE(SUM(amount), 0) as amount
+    FROM payment_transactions
+    WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+    GROUP BY status, paymentMethod
+    ORDER BY count DESC
+  `).all(estId, startIso, endIso);
+
+  const fiscalSummary = db.prepare(`
+    SELECT COALESCE(fiscalStatus, 'not_required') as status, COUNT(*) as count
+    FROM sales
+    WHERE establishmentId = ? AND createdAt >= ? AND createdAt < ?
+    GROUP BY COALESCE(fiscalStatus, 'not_required')
+    ORDER BY count DESC
+  `).all(estId, startIso, endIso);
+
   const previousStart = new Date(new Date(startIso).getTime() - (new Date(endIso).getTime() - new Date(startIso).getTime())).toISOString();
   const previous = db.prepare(`
     SELECT COUNT(*) as count, COALESCE(SUM(totalAmount), 0) as revenue
@@ -1254,6 +1322,13 @@ const collectAiReportMetrics = (estId, startIso, endIso) => {
 
   const totalRevenue = sales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
   const averageTicket = sales.length > 0 ? totalRevenue / sales.length : 0;
+  const operationalReferenceDate = new Date(Math.max(new Date(endIso).getTime() - 1, new Date(startIso).getTime()));
+  const operationalReport = buildInventoryReport(db, estId, {
+    now: operationalReferenceDate,
+    periodDays: 30,
+    salesWindowDays: 90,
+    ruptureRiskDays: 15,
+  });
 
   return {
     salesCount: sales.length,
@@ -1261,11 +1336,46 @@ const collectAiReportMetrics = (estId, startIso, endIso) => {
     averageTicket,
     previousRevenue: previous.revenue || 0,
     previousSalesCount: previous.count || 0,
+    revenueGrowthPct: calculateGrowthPct(totalRevenue, previous.revenue),
+    salesGrowthPct: calculateGrowthPct(sales.length, previous.count),
     paymentMethods,
+    paymentHealth,
+    fiscalSummary,
+    categorySales,
     topProducts,
     lowStock,
+    operational: {
+      summary: operationalReport.summary,
+      settings: operationalReport.settings,
+      topMarginProducts: operationalReport.marginByProduct.slice(0, 8),
+      ruptureRisks: operationalReport.ruptureRisks.slice(0, 8),
+      lowStockProducts: operationalReport.lowStockProducts.slice(0, 8),
+      stagnantProducts: operationalReport.stagnantProducts.slice(0, 8),
+      categoryBreakdown: operationalReport.categoryBreakdown.slice(0, 8),
+      movementSummary: operationalReport.movementSummary,
+      recentTrend: operationalReport.salesTrend.slice(-7),
+    },
   };
 };
+
+const buildAiReportPromptPayload = (metrics) => ({
+  indicadoresDoPeriodo: {
+    vendas: metrics.salesCount,
+    faturamento: Number(metrics.totalRevenue.toFixed(2)),
+    ticketMedio: Number(metrics.averageTicket.toFixed(2)),
+    vendasPeriodoAnterior: Number(metrics.previousSalesCount || 0),
+    faturamentoPeriodoAnterior: Number(metrics.previousRevenue || 0),
+    crescimentoFaturamentoPercentual: metrics.revenueGrowthPct,
+    crescimentoVendasPercentual: metrics.salesGrowthPct,
+  },
+  meiosDePagamento: metrics.paymentMethods,
+  saudeDosPagamentos: metrics.paymentHealth,
+  fiscal: metrics.fiscalSummary,
+  produtosMaisVendidos: metrics.topProducts,
+  categoriasMaisFortes: metrics.categorySales,
+  estoqueBaixoComVendaNosUltimos90Dias: metrics.lowStock,
+  operacaoEstoqueMargem: metrics.operational,
+});
 
 const buildAiReportPrompt = ({ periodType, metrics, startIso, endIso, establishmentName }) => `
 Voce e um consultor de gestao para um pequeno comercio/distribuidora.
@@ -1273,39 +1383,35 @@ Crie um relatorio ${periodType === 'weekly' ? 'semanal' : 'diario'} em portugues
 
 Estabelecimento: ${establishmentName || 'Estabelecimento'}
 Periodo: ${startIso} ate ${endIso}
-Vendas: ${metrics.salesCount}
-Faturamento: R$ ${metrics.totalRevenue.toFixed(2)}
-Ticket medio: R$ ${metrics.averageTicket.toFixed(2)}
-Periodo anterior: ${metrics.previousSalesCount} vendas | R$ ${Number(metrics.previousRevenue).toFixed(2)}
-Meios de pagamento: ${metrics.paymentMethods.map(p => `${p.paymentMethod}: ${p.count} vendas/R$${Number(p.revenue).toFixed(2)}`).join('; ') || 'sem vendas'}
-Produtos mais vendidos: ${metrics.topProducts.map(p => `${p.name}: ${p.quantity} un/R$${Number(p.revenue).toFixed(2)}`).join('; ') || 'sem vendas'}
-Estoque baixo: ${metrics.lowStock.map(p => `${p.name}: ${p.stock} un`).join('; ') || 'nenhum'}
+
+Dados apurados pelo sistema:
+${JSON.stringify(buildAiReportPromptPayload(metrics), null, 2)}
 
 Perguntas que voce deve responder:
 1. Como foi o desempenho do periodo?
 2. O negocio cresceu, caiu ou ficou estavel em relacao ao periodo anterior?
-3. Quais produtos, categorias ou comportamentos merecem atencao?
+3. Quais produtos, categorias, margem, estoque ou pagamentos merecem atencao?
 4. O que o gestor deve fazer primeiro no proximo periodo?
-5. Existem alertas de estoque, caixa ou operacao?
+5. Existem alertas de ruptura, estoque parado, falha fiscal ou pagamento?
 
 Formato obrigatorio de saida:
 Use exatamente os titulos abaixo, nesta ordem, em Markdown.
 Nao use introducao antes do primeiro titulo.
 Nao escreva linhas como "Relatorio diario", "Estabelecimento", "Periodo" ou "Resumo executivo em 3 linhas".
-No resumo executivo, escreva 1 paragrafo curto, sem bullets.
-Nas demais secoes, use bullets apenas quando ajudar.
+No resumo executivo, escreva 1 paragrafo curto com no maximo 90 palavras, sem bullets.
+Nas demais secoes, use no maximo 4 bullets por secao.
 Comece bullets importantes com uma expressao em negrito seguida de dois-pontos.
 Se nao houver pontos positivos reais, omita a secao "Pontos positivos".
 Inclua "Produtos e estoque" somente em relatorio semanal.
 Inclua "Observacoes" para observacoes gerais da IA.
 Em "Acoes recomendadas", use bullets objetivos, um por acao.
+Nao repita todos os numeros da base; use numeros apenas quando eles sustentarem uma decisao.
 
 ## Resumo executivo
 ## Pontos positivos
 ## Pontos de atencao
 ${periodType === 'weekly' ? '## Produtos e estoque' : ''}
 ## Observacoes
-## Alertas
 ## Acoes recomendadas
 
 Nao invente dados. Se nao houver vendas, recomende acoes simples para gerar movimento.
@@ -1320,9 +1426,9 @@ const generateAiReport = async ({ estId, periodType }) => {
   const cached = db.prepare(
     'SELECT * FROM ai_reports WHERE establishmentId = ? AND periodType = ? AND periodStart = ?'
   ).get(estId, periodType, startIso);
-  if (cached) return { ...cached, metrics: JSON.parse(cached.metrics || '{}'), cached: true };
+  if (cached) return parseAiReportRow(cached);
 
-  const metrics = collectAiReportMetrics(estId, startIso, endIso);
+  const metrics = collectAiReportMetrics(estId, startIso, endIso, periodType);
   const prompt = buildAiReportPrompt({ periodType, metrics, startIso, endIso, establishmentName: est?.name });
   const result = await geminiModel.generateContent(prompt);
   const content = result.response.text();
@@ -1332,7 +1438,7 @@ const generateAiReport = async ({ estId, periodType }) => {
     INSERT INTO ai_reports (id, establishmentId, periodType, periodStart, periodEnd, content, metrics, createdAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, estId, periodType, startIso, endIso, content, JSON.stringify(metrics), createdAt);
-  return { id, establishmentId: estId, periodType, periodStart: startIso, periodEnd: endIso, content, metrics, createdAt, cached: false };
+  return { id, establishmentId: estId, periodType, periodStart: startIso, periodEnd: endIso, content, metrics, createdAt, cached: false, available: true };
 };
 
 const createNotification = ({ establishmentId, userId = null, audience = 'gestor', type, title, message, referenceType = null, referenceId = null, scheduledFor = null }) => {
@@ -4787,7 +4893,7 @@ app.get('/api/ai/reports', authenticateToken, isGestorOrAbove, async (req, res) 
       return res.status(403).json({ error: 'Relatorios de IA sao por estabelecimento.' });
     }
     const periodType = req.query.period === 'weekly' ? 'weekly' : 'daily';
-    const report = await generateAiReport({ estId: req.user.establishmentId, periodType });
+    const report = getCachedAiReport({ estId: req.user.establishmentId, periodType });
     res.json(report);
   } catch (err) {
     console.error('[AI Report Error]', err.message);

@@ -486,6 +486,50 @@ test('gera relatorio operacional isolado por estabelecimento', async () => {
   assert.equal(reportB.payload.marginByProduct.some(item => item.productId === 'product-a'), false);
 });
 
+test('consulta relatorio IA programado sem gerar chamada fora do agendamento', async () => {
+  db.prepare("DELETE FROM ai_reports WHERE establishmentId IN ('est-a', 'est-b')").run();
+
+  const empty = await request('/api/ai/reports?period=daily', { token: tokenA });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.payload.available, false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ai_reports WHERE establishmentId = 'est-a'").get().count, 0);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const periodStart = yesterday.toISOString();
+  const periodEnd = today.toISOString();
+  const metrics = {
+    salesCount: 3,
+    totalRevenue: 60,
+    averageTicket: 20,
+    previousRevenue: 40,
+    previousSalesCount: 2,
+    paymentMethods: [],
+    topProducts: [],
+    lowStock: [],
+  };
+
+  db.prepare(`
+    INSERT INTO ai_reports (id, establishmentId, periodType, periodStart, periodEnd, content, metrics, createdAt)
+    VALUES ('ai-report-est-a', 'est-a', 'daily', ?, ?, '## Resumo executivo\nTeste de relatorio salvo.', ?, ?)
+  `).run(periodStart, periodEnd, JSON.stringify(metrics), now);
+
+  const cached = await request('/api/ai/reports?period=daily', { token: tokenA });
+  const otherTenant = await request('/api/ai/reports?period=daily', { token: tokenB });
+  const blocked = await request('/api/ai/reports?period=daily', { token: superToken });
+
+  assert.equal(cached.status, 200);
+  assert.equal(cached.payload.available, true);
+  assert.equal(cached.payload.cached, true);
+  assert.equal(cached.payload.id, 'ai-report-est-a');
+  assert.equal(cached.payload.metrics.salesCount, 3);
+  assert.equal(otherTenant.status, 200);
+  assert.equal(otherTenant.payload.available, false);
+  assert.equal(blocked.status, 403);
+});
+
 test('gera notificacoes operacionais por estabelecimento sem duplicar no refresh', async () => {
   const alertNow = new Date().toISOString();
   db.prepare(`

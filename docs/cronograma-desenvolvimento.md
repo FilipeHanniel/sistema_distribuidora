@@ -77,10 +77,7 @@ Objetivo: melhorar o dia a dia do gestor e operador.
 - Criar fornecedores. Concluido em 28/06/2026 com cadastro, edicao, inativacao e isolamento por estabelecimento.
 - Criar razao de movimentacoes de estoque. Concluido em 28/06/2026 cobrindo saldo inicial, compras, reversoes, vendas e ajustes manuais.
 - Criar relatorios de estoque, margem e ruptura. Concluido em 14/07/2026 com calculo backend por estabelecimento, margem por produto, curva de faturamento, produtos parados, estoque baixo ativo e risco de ruptura por saida dos ultimos 90 dias.
-- Melhorar relatorio de gestao com IA.
-  - Fazer a IA usar dados de estoque, margem, ruptura, produtos parados, vendas e movimentacoes.
-  - Padronizar blocos: resumo executivo, pontos positivos, pontos de atencao, acoes recomendadas e observacoes.
-  - Inserir atalhos do relatorio para os relatorios operacionais.
+- Melhorar relatorio de gestao com IA. Concluido em 17/07/2026 com geracao economica programada, leitura por cache no painel, uso de dados operacionais de estoque/margem/ruptura/produtos parados/pagamentos/fiscal e prompt com blocos padronizados para o gestor.
 - Criar central de notificacoes mais completa. Concluido em 14/07/2026 com sincronizacao operacional automatica, alertas de ruptura, estoque baixo, produtos parados, compra recebida, pagamento pendente/erro, falha fiscal, venda sem NF autorizada e leitura visual por tipo.
   - Gerar alertas para risco de ruptura, produtos parados e estoque baixo ativo.
   - Notificar compra recebida, falha fiscal, venda sem NF autorizada, pagamento pendente/erro e vencimento de assinatura.
@@ -129,7 +126,7 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
 
-1. Melhorar o relatorio de gestao com IA usando os dados operacionais.
+1. Revisar UX final dos relatorios operacionais e do relatorio inteligente em uso real.
 2. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
 3. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
 

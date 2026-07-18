@@ -371,6 +371,18 @@
   font-size: 0.85rem;
 }
 
+.ai-report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.ai-report-link {
+  white-space: nowrap;
+}
+
 .ai-report-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -381,6 +393,41 @@
 
 .ai-report-card.weekly {
   border-color: rgba(13, 148, 136, 0.35);
+}
+
+.ai-report-empty-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.ai-report-empty-card svg {
+  color: var(--primary);
+  margin-top: 0.1rem;
+  flex-shrink: 0;
+}
+
+.ai-report-empty-card strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 0.94rem;
+  margin-bottom: 0.25rem;
+}
+
+.ai-report-empty-card p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.ai-report-empty-card.weekly svg {
+  color: #0d9488;
 }
 
 .ai-report-meta {
