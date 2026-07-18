@@ -90,6 +90,64 @@ Adicione:
 
 Isso cria backup todos os dias as 03h.
 
+## Pacote para copia externa
+
+O backup diario protege contra erros operacionais, mas continua no VPS. Para facilitar uma copia fora do servidor, existe um comando que gera uma pasta pronta para envio externo.
+
+No servidor:
+
+```bash
+cd /var/www/sistema_distribuidora
+bash tools/export-sqlite-backup.sh
+```
+
+Tambem pode usar:
+
+```bash
+npm run backup:sqlite:export
+```
+
+Por padrao, esse comando cria um backup novo e gera um pacote em:
+
+```text
+/var/backups/sistema_distribuidora/offsite-ready
+```
+
+Exemplo:
+
+```text
+banco-offsite-20260717-031000/
+  banco-20260717-031000.sqlite.gz
+  banco-20260717-031000.sqlite.gz.manifest.json
+  banco-20260717-031000.sqlite.gz.sha256
+  offsite-package.json
+  RESTORE.txt
+```
+
+Esse diretorio pode ser copiado para outro servidor, HD externo, Google Drive, S3 ou outro armazenamento. O arquivo `.sha256` permite conferir se a copia chegou integra.
+
+Para exportar apenas o backup mais recente, sem criar outro backup:
+
+```bash
+bash tools/export-sqlite-backup.sh --latest
+```
+
+Para escolher o destino:
+
+```bash
+OFFSITE_BACKUP_DIR=/mnt/backup-externo/sistema_distribuidora bash tools/export-sqlite-backup.sh
+```
+
+## Backup automatico com pacote externo
+
+Se quiser gerar o backup e o pacote externo todos os dias, adicione ao cron:
+
+```cron
+10 3 * * * cd /var/www/sistema_distribuidora && bash tools/export-sqlite-backup.sh --latest >> /var/log/sistema-distribuidora-backup-offsite.log 2>&1
+```
+
+Esse exemplo presume que o backup das 03h ja foi criado. Por isso ele roda as 03h10 usando `--latest`.
+
 ## Retencao
 
 Por padrao, backups com mais de 15 dias sao removidos automaticamente.
@@ -123,6 +181,12 @@ O campo `backupIntegrity` deve estar como:
 
 ```json
 "backupIntegrity": "ok"
+```
+
+Para conferir o ultimo pacote externo gerado:
+
+```bash
+cat /var/backups/sistema_distribuidora/offsite-ready/latest-offsite-package.txt
 ```
 
 ## Restaurar um backup
@@ -194,12 +258,13 @@ Ele valida que:
 - um banco SQLite temporario e criado;
 - o backup comprimido e gerado;
 - o manifesto e criado;
+- um pacote externo e gerado com manifesto, guia de restauracao e SHA-256;
 - backups antigos sao removidos pela retencao;
 - o banco alterado volta ao estado original apos restore;
 - o banco substituido fica salvo como `before-restore`.
 
 ## Limite atual
 
-Este backup ainda fica no mesmo servidor. Ele protege contra erro operacional, deploy ruim e corrupcao simples, mas nao protege contra perda total do VPS.
+O comando `export` prepara a copia externa, mas o servidor so fica protegido contra perda total do VPS se essa pasta for realmente copiada para outro destino.
 
-Em etapa futura, envie uma copia para outro destino, como outro servidor, S3, Google Drive ou armazenamento equivalente.
+Na implantacao comercial, defina um destino definitivo, como outro servidor, S3, Google Drive ou armazenamento equivalente, e monitore se a copia externa esta sendo criada.

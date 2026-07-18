@@ -24,9 +24,10 @@ const readSampleValue = (dbFile) => {
 };
 
 test('cria backup SQLite validado e restaura com copia de seguranca previa', async () => {
-  const { createBackup, restoreBackup } = await import(toolsUrl);
+  const { createBackup, exportBackupPackage, restoreBackup } = await import(toolsUrl);
   const dbFile = path.join(tempDir, 'banco.sqlite');
   const backupDir = path.join(tempDir, 'backups');
+  const offsiteDir = path.join(tempDir, 'offsite');
   await fsp.mkdir(backupDir, { recursive: true });
 
   const db = new Database(dbFile);
@@ -58,6 +59,26 @@ test('cria backup SQLite validado e restaura com copia de seguranca previa', asy
   assert.equal(backup.manifest.backupIntegrity, 'ok');
   assert.equal(backup.manifest.sha256.length, 64);
   assert.deepEqual(backup.manifest.tables, ['sample']);
+
+  const offsite = await exportBackupPackage({
+    backupFile: backup.backupFile,
+    backupDir,
+    offsiteDir,
+    now: new Date('2026-07-17T12:10:00.000Z'),
+  });
+
+  assert.equal(fs.existsSync(offsite.packageDir), true);
+  assert.equal(fs.existsSync(offsite.backupFile), true);
+  assert.equal(fs.existsSync(offsite.manifestFile), true);
+  assert.equal(fs.existsSync(offsite.checksumFile), true);
+  assert.equal(fs.existsSync(offsite.restoreGuideFile), true);
+  assert.equal(offsite.createdBackupInThisRun, false);
+  assert.equal(offsite.sha256, backup.manifest.sha256);
+  assert.match(fs.readFileSync(offsite.checksumFile, 'utf8'), new RegExp(`^${backup.manifest.sha256}`));
+
+  const packageManifest = JSON.parse(fs.readFileSync(offsite.metadataFile, 'utf8'));
+  assert.equal(packageManifest.kind, 'sqlite-offsite-package');
+  assert.equal(packageManifest.files.backup, path.basename(backup.backupFile));
 
   const mutated = new Database(dbFile);
   mutated.prepare('UPDATE sample SET value = ? WHERE id = 1').run('valor-alterado');

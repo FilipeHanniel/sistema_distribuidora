@@ -35,10 +35,12 @@ const resolveConfig = (overrides = {}) => {
   const defaultBackupDir = process.platform === 'win32'
     ? path.join(appDir, 'backups')
     : '/var/backups/sistema_distribuidora';
+  const backupDir = path.resolve(overrides.backupDir || process.env.BACKUP_DIR || defaultBackupDir);
   return {
     appDir,
     dbFile: path.resolve(overrides.dbFile || process.env.DB_FILE || path.join(appDir, 'backend', 'banco.sqlite')),
-    backupDir: path.resolve(overrides.backupDir || process.env.BACKUP_DIR || defaultBackupDir),
+    backupDir,
+    offsiteDir: path.resolve(overrides.offsiteDir || process.env.OFFSITE_BACKUP_DIR || path.join(backupDir, 'offsite-ready')),
     keepDays: Number(overrides.keepDays ?? process.env.KEEP_DAYS ?? 15),
     prefix: overrides.prefix || process.env.BACKUP_PREFIX || 'banco',
   };
@@ -79,6 +81,11 @@ const gunzipFile = async (source, target) => {
 
 const copySqlite = async (source, target) => {
   await fs.copyFile(source, target);
+};
+
+const safeReadJson = async (filePath) => {
+  const raw = await fs.readFile(filePath, 'utf8');
+  return JSON.parse(raw);
 };
 
 const validateSqlite = (dbFile) => {
@@ -184,6 +191,154 @@ export const createBackup = async (options = {}) => {
   };
 };
 
+const listBackups = async ({ backupDir, prefix }) => {
+  if (!(await fileExists(backupDir))) return [];
+
+  const entries = await fs.readdir(backupDir, { withFileTypes: true });
+  const backups = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith(`${prefix}-`) || !entry.name.endsWith('.sqlite.gz')) continue;
+
+    const backupFile = path.join(backupDir, entry.name);
+    const manifestFile = `${backupFile}.manifest.json`;
+    const stat = await fs.stat(backupFile);
+    backups.push({
+      backupFile,
+      manifestFile,
+      mtimeMs: stat.mtimeMs,
+      name: entry.name,
+      hasManifest: await fileExists(manifestFile),
+    });
+  }
+
+  return backups.sort((a, b) => {
+    if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
+    return b.name.localeCompare(a.name);
+  });
+};
+
+const resolveExportBackup = async (config, options = {}) => {
+  const requested = options.backupFile || options.backup || process.env.BACKUP_FILE;
+  if (requested) {
+    const backupFile = path.resolve(requested);
+    return { backupFile, manifestFile: `${backupFile}.manifest.json`, createdNow: false };
+  }
+
+  if (options.latest) {
+    const [latest] = await listBackups(config);
+    if (!latest) {
+      throw new Error(`Nenhum backup encontrado em: ${config.backupDir}`);
+    }
+    return { backupFile: latest.backupFile, manifestFile: latest.manifestFile, createdNow: false };
+  }
+
+  const created = await createBackup(options);
+  return { backupFile: created.backupFile, manifestFile: created.manifestFile, createdNow: true };
+};
+
+const buildRestoreGuide = ({ packageName, backupName, manifestName, checksumName }) => [
+  'Pacote externo de backup SQLite',
+  '',
+  `Pacote: ${packageName}`,
+  '',
+  'Arquivos:',
+  `- ${backupName}: backup comprimido do banco.`,
+  `- ${manifestName}: manifesto com tabelas, tamanho, hash e integridade.`,
+  `- ${checksumName}: hash SHA-256 para conferir a copia.`,
+  '',
+  'Como conferir o hash no servidor:',
+  '',
+  `sha256sum -c ${checksumName}`,
+  '',
+  'Como restaurar:',
+  '',
+  'cd /var/www/sistema_distribuidora',
+  'pm2 stop sistema-distribuidora',
+  `bash tools/restore-sqlite.sh --backup /caminho/do/pacote/${backupName} --yes`,
+  'pm2 restart sistema-distribuidora --update-env',
+  '',
+  'Importante: mantenha uma copia deste pacote fora do VPS.',
+  '',
+].join('\n');
+
+export const exportBackupPackage = async (options = {}) => {
+  const config = resolveConfig(options);
+  const now = options.now || new Date();
+  const packageName = `${config.prefix}-offsite-${timestamp(now)}`;
+  const packageDir = path.join(config.offsiteDir, packageName);
+
+  const { backupFile, manifestFile, createdNow } = await resolveExportBackup(config, options);
+  if (!(await fileExists(backupFile))) {
+    throw new Error(`Backup nao encontrado: ${backupFile}`);
+  }
+  if (!(await fileExists(manifestFile))) {
+    throw new Error(`Manifesto nao encontrado: ${manifestFile}`);
+  }
+
+  const manifest = await safeReadJson(manifestFile);
+  const sha256 = await sha256File(backupFile);
+  if (manifest.sha256 && manifest.sha256 !== sha256) {
+    throw new Error('Hash do backup nao confere com o manifesto. Exporte outro backup antes de copiar.');
+  }
+
+  await fs.mkdir(packageDir, { recursive: true });
+
+  const backupName = path.basename(backupFile);
+  const manifestName = path.basename(manifestFile);
+  const checksumName = `${backupName}.sha256`;
+  const metadataName = 'offsite-package.json';
+  const guideName = 'RESTORE.txt';
+
+  const exportedBackup = path.join(packageDir, backupName);
+  const exportedManifest = path.join(packageDir, manifestName);
+  const checksumFile = path.join(packageDir, checksumName);
+  const metadataFile = path.join(packageDir, metadataName);
+  const restoreGuideFile = path.join(packageDir, guideName);
+
+  await fs.copyFile(backupFile, exportedBackup);
+  await fs.copyFile(manifestFile, exportedManifest);
+  await fs.writeFile(checksumFile, `${sha256}  ${backupName}\n`);
+
+  const packageManifest = {
+    version: 1,
+    kind: 'sqlite-offsite-package',
+    createdAt: now.toISOString(),
+    createdBackupInThisRun: createdNow,
+    sourceBackup: backupFile,
+    exportedBackup,
+    exportedManifest,
+    sha256,
+    files: {
+      backup: backupName,
+      manifest: manifestName,
+      checksum: checksumName,
+      restoreGuide: guideName,
+    },
+  };
+
+  await fs.writeFile(metadataFile, `${JSON.stringify(packageManifest, null, 2)}\n`);
+  await fs.writeFile(restoreGuideFile, buildRestoreGuide({
+    packageName,
+    backupName,
+    manifestName,
+    checksumName,
+  }));
+  await fs.writeFile(path.join(config.offsiteDir, 'latest-offsite-package.txt'), `${packageDir}\n`);
+
+  return {
+    packageDir,
+    backupFile: exportedBackup,
+    manifestFile: exportedManifest,
+    checksumFile,
+    metadataFile,
+    restoreGuideFile,
+    sha256,
+    createdBackupInThisRun: createdNow,
+  };
+};
+
 const resolveRestoreBackupFile = (options = {}) => {
   const positional = options.backupFile || process.env.BACKUP_FILE;
   if (positional) return path.resolve(positional);
@@ -252,14 +407,17 @@ export const restoreBackup = async (options = {}) => {
 
 const parseArgs = (argv) => {
   const args = { _: [] };
+  const booleanFlags = new Set(['yes', 'latest']);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--yes') {
-      args.yes = true;
-    } else if (arg.startsWith('--')) {
+    if (arg.startsWith('--')) {
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-      args[key] = argv[i + 1];
-      i += 1;
+      if (booleanFlags.has(key)) {
+        args[key] = true;
+      } else {
+        args[key] = argv[i + 1];
+        i += 1;
+      }
     } else {
       args._.push(arg);
     }
@@ -279,6 +437,15 @@ const runCli = async () => {
     return;
   }
 
+  if (command === 'export') {
+    const backupFile = args.backup || args._[0];
+    const result = await exportBackupPackage({ ...args, backupFile });
+    console.log(`Pacote externo criado: ${result.packageDir}`);
+    console.log(`Backup exportado: ${result.backupFile}`);
+    console.log(`Checksum SHA-256: ${result.checksumFile}`);
+    return;
+  }
+
   if (command === 'restore') {
     const backupFile = args.backup || args._[0];
     const result = await restoreBackup({ ...args, backupFile });
@@ -290,6 +457,7 @@ const runCli = async () => {
 
   console.error('Uso:');
   console.error('  node tools/sqlite-maintenance.mjs backup [--db-file caminho] [--backup-dir caminho]');
+  console.error('  node tools/sqlite-maintenance.mjs export [--latest] [--offsite-dir caminho] [--backup arquivo.sqlite.gz]');
   console.error('  node tools/sqlite-maintenance.mjs restore --backup arquivo.sqlite.gz --yes [--db-file caminho]');
   process.exitCode = 1;
 };

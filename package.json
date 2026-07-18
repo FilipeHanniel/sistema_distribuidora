@@ -11,6 +11,7 @@
     "start": "node backend/server.js",
     "start:prod": "NODE_ENV=production node backend/server.js",
     "backup:sqlite": "node tools/sqlite-maintenance.mjs backup",
+    "backup:sqlite:export": "node tools/sqlite-maintenance.mjs export",
     "restore:sqlite": "node tools/sqlite-maintenance.mjs restore",
     "setup": "npm install && cd backend && npm install",
     "deploy": "npm run build && NODE_ENV=production node backend/server.js"
