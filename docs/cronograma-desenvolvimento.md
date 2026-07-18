@@ -95,7 +95,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 - Melhorar permissoes por perfil. Concluido em 17/07/2026 com politica nomeada de permissoes no backend, menus/rotas do frontend por permissao e testes para limitar operador ao fluxo do caixa.
 - Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
 - Criar rotina de backup e restauracao testada. Concluido em 17/07/2026 com backup validado por `integrity_check`, manifesto SHA-256, restauracao com copia `before-restore`, bloqueio de WAL/SHM e teste automatizado em banco temporario.
-- Documentar LGPD basica para dados de clientes/usuarios.
+- Documentar LGPD basica para dados de clientes/usuarios. Concluido em 17/07/2026 com inventario inicial, papeis controlador/operador, cuidados com IA, fluxo de titulares, incidentes e checklist contratual em [docs/lgpd-basica.md](lgpd-basica.md).
 
 ## Fase 7 - Qualidade e testes
 
@@ -126,8 +126,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Documentar LGPD basica para dados de clientes/usuarios.
-2. Criar politica de recuperacao de senha.
-3. Planejar copia externa dos backups fora do VPS.
+1. Criar politica de recuperacao de senha.
+2. Planejar copia externa dos backups fora do VPS.
+3. Preparar termos/contrato LGPD para clientes piloto.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)

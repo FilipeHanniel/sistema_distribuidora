@@ -2,6 +2,8 @@
 
 Este checklist registra os controles minimos antes de operar clientes reais.
 
+Documento complementar: [LGPD basica para o sistema](lgpd-basica.md).
+
 ## Variaveis obrigatorias
 
 - `NODE_ENV=production`
@@ -45,3 +47,15 @@ Logs de erro de provedores e auditoria passam por sanitizacao antes de serem gra
 - chaves Pix;
 - assinaturas webhook;
 - payloads completos com credenciais.
+
+## Privacidade e LGPD
+
+Antes de operar clientes reais, mantenha atualizados:
+
+- inventario de dados tratados pela plataforma;
+- lista de provedores externos/subprocessadores;
+- politica de privacidade e termos de uso;
+- procedimento para atender pedidos de titulares;
+- procedimento de resposta a incidentes.
+
+Base inicial: [docs/lgpd-basica.md](lgpd-basica.md).
