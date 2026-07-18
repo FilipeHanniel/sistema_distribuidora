@@ -138,6 +138,29 @@ Para escolher o destino:
 OFFSITE_BACKUP_DIR=/mnt/backup-externo/sistema_distribuidora bash tools/export-sqlite-backup.sh
 ```
 
+## Copia externa manual
+
+Como politica inicial para pilotos, a copia externa sera manual. O procedimento completo esta em:
+
+```text
+docs/backup-externo-manual.md
+```
+
+Resumo:
+
+```bash
+cd /var/www/sistema_distribuidora
+bash tools/backup-sqlite.sh
+bash tools/export-sqlite-backup.sh --latest
+cat /var/backups/sistema_distribuidora/offsite-ready/latest-offsite-package.txt
+```
+
+Depois, na maquina local com Git Bash:
+
+```bash
+scp -r root@SEU_SERVIDOR:/var/backups/sistema_distribuidora/offsite-ready/banco-offsite-YYYYMMDD-HHMMSS ~/Backups/sistema_distribuidora/
+```
+
 ## Backup automatico com pacote externo
 
 Se quiser gerar o backup e o pacote externo todos os dias, adicione ao cron:

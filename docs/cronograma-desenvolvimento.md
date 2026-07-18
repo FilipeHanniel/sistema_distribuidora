@@ -96,6 +96,7 @@ Objetivo: reduzir risco antes de escalar clientes reais.
 - Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
 - Criar rotina de backup e restauracao testada. Concluido em 17/07/2026 com backup validado por `integrity_check`, manifesto SHA-256, restauracao com copia `before-restore`, bloqueio de WAL/SHM e teste automatizado em banco temporario.
 - Preparar copia externa dos backups fora do VPS. Concluido em 17/07/2026 com pacote `offsite-ready`, manifesto, SHA-256, guia de restauracao e script `tools/export-sqlite-backup.sh`. A escolha do armazenamento externo definitivo fica para operacao comercial.
+- Definir destino externo inicial dos backups. Concluido em 18/07/2026 com politica simples de copia manual para maquina local/Drive em [docs/backup-externo-manual.md](backup-externo-manual.md). Automacao externa fica para quando houver clientes pagantes.
 - Documentar LGPD basica para dados de clientes/usuarios. Concluido em 17/07/2026 com inventario inicial, papeis controlador/operador, cuidados com IA, fluxo de titulares, incidentes e checklist contratual em [docs/lgpd-basica.md](lgpd-basica.md).
 - Preparar termos/contrato LGPD para clientes piloto. Concluido em 18/07/2026 com minuta operacional em [docs/termos-clientes-piloto.md](termos-clientes-piloto.md), incluindo papeis LGPD, certificado A1, pagamentos, fiscal, IA, backups, suporte, incidentes e checklist de aceite.
 
@@ -128,8 +129,8 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Definir destino externo definitivo para os backups, como outro servidor, S3, Google Drive ou equivalente.
-2. Criar recuperacao automatica por e-mail quando houver servico de e-mail transacional.
-3. Revisar a minuta de termos para clientes piloto com advogado/contador antes de uso comercial real.
+1. Criar recuperacao automatica por e-mail quando houver servico de e-mail transacional.
+2. Revisar a minuta de termos para clientes piloto com advogado/contador antes de uso comercial real.
+3. Evoluir backup externo manual para copia automatica quando houver clientes pagantes.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
