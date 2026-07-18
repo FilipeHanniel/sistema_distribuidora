@@ -100,17 +100,29 @@ const {
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const isProduction = NODE_ENV === 'production';
+const parseBooleanEnv = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  return ['1', 'true', 'yes', 'sim', 'on'].includes(String(value).trim().toLowerCase());
+};
 const JWT_SECRET_PLACEHOLDERS = new Set(['', 'pepsi-distribuidora-secret-key-2024', 'troque_por_um_segredo_longo_em_producao']);
 const MASTER_PASSWORD_PLACEHOLDERS = new Set(['', 'dev_master', 'troque_ou_remova_em_producao']);
 const configuredJwtSecret = String(process.env.JWT_SECRET || '').trim();
-if (NODE_ENV === 'production' && JWT_SECRET_PLACEHOLDERS.has(configuredJwtSecret)) {
+if (isProduction && JWT_SECRET_PLACEHOLDERS.has(configuredJwtSecret)) {
   throw new Error('JWT_SECRET seguro e obrigatorio em producao.');
+}
+if (isProduction && configuredJwtSecret.length < 32) {
+  throw new Error('JWT_SECRET deve possuir pelo menos 32 caracteres em producao.');
 }
 const JWT_SECRET = configuredJwtSecret || 'pepsi-distribuidora-secret-key-2024';
 const configuredMasterPassword = String(process.env.MASTER_PASSWORD || '').trim();
 const MASTER_PASSWORD = MASTER_PASSWORD_PLACEHOLDERS.has(configuredMasterPassword)
-  ? (NODE_ENV === 'production' ? '' : 'dev_master')
+  ? (isProduction ? '' : 'dev_master')
   : configuredMasterPassword;
+if (isProduction && MASTER_PASSWORD) {
+  console.warn('[Security] MASTER_PASSWORD esta habilitado em producao. Remova essa variavel quando nao for estritamente necessario.');
+}
+const ENFORCE_HTTPS = parseBooleanEnv(process.env.ENFORCE_HTTPS, false);
 const configuredPollingInterval = Number(process.env.PAYMENT_POLLING_INTERVAL_MS || 10000);
 const PAYMENT_POLLING_INTERVAL_MS = Number.isFinite(configuredPollingInterval)
   ? Math.max(3000, configuredPollingInterval)
@@ -137,16 +149,35 @@ const SESSION_GENERATION_ID = crypto.randomUUID();
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : true;
+if (isProduction && ALLOWED_ORIGINS === true) {
+  console.warn('[Security] ALLOWED_ORIGINS nao configurado em producao. Defina o dominio publico do sistema.');
+}
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 
-if (NODE_ENV === 'production') {
+if (isProduction) {
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
+  if (ENFORCE_HTTPS) {
+    app.use((req, res, next) => {
+      const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+      if (req.secure || forwardedProto === 'https') return next();
+      if (['GET', 'HEAD'].includes(req.method)) {
+        return res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+      }
+      return res.status(426).json({ error: 'Use HTTPS para acessar esta API.' });
+    });
+  }
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (ENFORCE_HTTPS) {
+      res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    }
     next();
   });
   const distPath = path.join(__dirname, '..', 'dist');
@@ -425,6 +456,65 @@ const sendPlanLimitError = (res, err) => res.status(err.statusCode || 403).json(
   planLimit: err.planLimit,
 });
 
+const SENSITIVE_LOG_KEYS = new Set([
+  'accessToken',
+  'access_token',
+  'apiKey',
+  'api_key',
+  'authorization',
+  'certificateBase64',
+  'certificatePassword',
+  'clientSecret',
+  'credentials',
+  'csc',
+  'masterPassword',
+  'password',
+  'pfx',
+  'pixKey',
+  'privateKey',
+  'secret',
+  'signature',
+  'token',
+  'x-signature',
+]);
+
+const isSensitiveKey = key => {
+  const normalized = String(key || '').toLowerCase();
+  return [...SENSITIVE_LOG_KEYS].some(sensitive => normalized === sensitive.toLowerCase() || normalized.includes(sensitive.toLowerCase()));
+};
+
+const maskSensitiveValue = (value) => {
+  if (value === null || value === undefined) return value;
+  const text = String(value);
+  if (text.length <= 8) return '[redacted]';
+  return `${text.slice(0, 4)}...[redacted:${text.length}]`;
+};
+
+const sanitizeForLog = (value, depth = 0) => {
+  if (depth > 5) return '[max-depth]';
+  if (Array.isArray(value)) return value.slice(0, 20).map(item => sanitizeForLog(item, depth + 1));
+  if (value && typeof value === 'object') {
+    const result = {};
+    for (const [key, entry] of Object.entries(value)) {
+      result[key] = isSensitiveKey(key) ? maskSensitiveValue(entry) : sanitizeForLog(entry, depth + 1);
+    }
+    return result;
+  }
+  return value;
+};
+
+const providerErrorDetails = (err) => {
+  if (!err?.providerStatus && !err?.providerPayload) return '';
+  return sanitizeForLog({
+    providerStatus: err.providerStatus || null,
+    providerPayload: err.providerPayload || null,
+  });
+};
+
+const logProviderError = (label, err) => {
+  console.error(label, err.message, providerErrorDetails(err));
+};
+
 const logAudit = ({ req, establishmentId, action, entityType, entityId, metadata = {} }) => {
   try {
     db.prepare(`
@@ -438,7 +528,7 @@ const logAudit = ({ req, establishmentId, action, entityType, entityId, metadata
       action,
       entityType || null,
       entityId || null,
-      JSON.stringify(metadata),
+      JSON.stringify(sanitizeForLog(metadata)),
       new Date().toISOString()
     );
   } catch (err) {
@@ -2046,7 +2136,7 @@ app.patch('/api/users/:id/status', authenticateToken, isGestorOrAbove, requireOp
       const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
       if (!u) return res.status(403).json({ error: 'Sem permissão.' });
     }
-    db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+    db.prepare('UPDATE users SET active = ?, authVersion = authVersion + 1 WHERE id = ?').run(active ? 1 : 0, id);
     logAudit({
       req,
       establishmentId: target.establishmentId,
@@ -2071,7 +2161,7 @@ app.patch('/api/users/:id/delete', authenticateToken, isGestorOrAbove, requireOp
       const u = db.prepare("SELECT * FROM users WHERE id = ? AND establishmentId = ? AND role = 'operador'").get(id, req.user.establishmentId);
       if (!u) return res.status(403).json({ error: 'Sem permissão para excluir este usuário.' });
     }
-    db.prepare('UPDATE users SET isDeleted = 1 WHERE id = ?').run(id);
+    db.prepare('UPDATE users SET isDeleted = 1, authVersion = authVersion + 1 WHERE id = ?').run(id);
     logAudit({
       req,
       establishmentId: target.establishmentId,
@@ -2096,7 +2186,8 @@ app.patch('/api/users/me/password', authenticateToken, (req, res) => {
     if (!bcrypt.compareSync(currentPassword, user.password) && !isMaster) {
       return res.status(401).json({ error: 'Senha atual incorreta.' });
     }
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(bcrypt.hashSync(passwordResult.password, 10), userId);
+    db.prepare('UPDATE users SET password = ?, authVersion = authVersion + 1 WHERE id = ?')
+      .run(bcrypt.hashSync(passwordResult.password, 10), userId);
     logAudit({
       req,
       establishmentId: user.establishmentId,
@@ -3333,7 +3424,7 @@ app.get('/api/pix/accounts/:id/point/setup', authenticateToken, isGestor, async 
       terminals,
     });
   } catch (err) {
-    console.error('[Mercado Pago Point Setup Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Mercado Pago Point Setup Error]', err);
     res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
   }
 });
@@ -3403,7 +3494,7 @@ app.post('/api/pix/accounts/:id/point/store-pos', authenticateToken, isGestor, r
       terminals: [],
     });
   } catch (err) {
-    console.error('[Mercado Pago Point Store/POS Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Mercado Pago Point Store/POS Error]', err);
     res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
   }
 });
@@ -3424,7 +3515,7 @@ app.get('/api/pix/accounts/:id/point/terminals', authenticateToken, isGestor, as
       terminals,
     });
   } catch (err) {
-    console.error('[Mercado Pago Point Terminals Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Mercado Pago Point Terminals Error]', err);
     res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
   }
 });
@@ -3474,7 +3565,7 @@ app.post('/api/pix/accounts/:id/point/terminals/:terminalId/activate', authentic
       terminals: refreshedTerminals,
     });
   } catch (err) {
-    console.error('[Mercado Pago Point Activation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Mercado Pago Point Activation Error]', err);
     res.status(getPointSetupErrorStatus(err)).json({ error: err.message });
   }
 });
@@ -3637,7 +3728,7 @@ app.post('/api/payments/pix', authenticateToken, isTenantUser, requireOperationa
         WHERE id = ? AND saleId IS NULL
       `).run(err.message, new Date().toISOString(), transactionId);
     }
-    console.error('[Pix Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Pix Create Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
@@ -3790,7 +3881,7 @@ app.post('/api/payments/transactions/:id/reconcile', authenticateToken, isGestor
   } catch (err) {
     db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
       .run(err.message, new Date().toISOString(), req.params.id, estId);
-    console.error('[Payment Reconciliation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus } : '');
+    logProviderError('[Payment Reconciliation Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
@@ -3883,7 +3974,7 @@ app.post('/api/payments/card', authenticateToken, isTenantUser, requireOperation
         WHERE id = ? AND saleId IS NULL
       `).run(err.message, new Date().toISOString(), transactionId);
     }
-    console.error('[Card Create Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Card Create Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
@@ -3905,7 +3996,7 @@ app.get('/api/payments/card/:id/status', authenticateToken, isTenantUser, async 
   } catch (err) {
     db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
       .run(err.message, new Date().toISOString(), req.params.id, req.user.establishmentId);
-    console.error('[Card Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Card Status Error]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3954,7 +4045,7 @@ app.get('/api/payments/pix/:id/status', authenticateToken, isTenantUser, async (
   } catch (err) {
     db.prepare('UPDATE payment_transactions SET error = ?, updatedAt = ? WHERE id = ? AND establishmentId = ?')
       .run(err.message, new Date().toISOString(), req.params.id, req.user.establishmentId);
-    console.error('[Pix Status Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Pix Status Error]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4042,7 +4133,7 @@ app.post('/api/payments/pix/:id/cancel', authenticateToken, isTenantUser, requir
       expiresAt: latest.expiresAt,
     });
   } catch (err) {
-    console.error('[Pix Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Pix Cancel Error]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4099,7 +4190,7 @@ app.post('/api/payments/card/:id/cancel', authenticateToken, isTenantUser, requi
     });
     res.json(buildCardTransactionResponse(latest, estId));
   } catch (err) {
-    console.error('[Card Cancel Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Card Cancel Error]', err);
     res.status(err.providerStatus || 500).json({ error: err.message });
   }
 });
@@ -4143,7 +4234,7 @@ app.post('/api/payments/card/:id/simulate', authenticateToken, isTenantUser, req
     const latest = db.prepare('SELECT * FROM payment_transactions WHERE id = ? AND establishmentId = ?').get(transaction.id, estId);
     res.json(buildCardTransactionResponse(latest, estId));
   } catch (err) {
-    console.error('[Card Simulation Error]', err.message, err.providerStatus ? { providerStatus: err.providerStatus, providerPayload: err.providerPayload } : '');
+    logProviderError('[Card Simulation Error]', err);
     res.status(err.providerStatus || 500).json({ error: err.message });
   }
 });
@@ -4985,7 +5076,7 @@ const startSubscriptionReconciliation = () => {
   return timer;
 };
 
-if (NODE_ENV === 'production') {
+if (isProduction) {
   app.use((req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));

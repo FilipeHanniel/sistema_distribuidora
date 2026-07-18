@@ -24,6 +24,12 @@ const validatePassword = (value) => {
   if (password.length < 8) {
     return { valid: false, password, error: 'A senha deve possuir pelo menos 8 caracteres.' };
   }
+  if (password.length > 128) {
+    return { valid: false, password, error: 'A senha deve possuir no maximo 128 caracteres.' };
+  }
+  if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    return { valid: false, password, error: 'A senha deve conter letras e numeros.' };
+  }
   return { valid: true, password, error: null };
 };
 

@@ -19,5 +19,7 @@ test('normaliza e valida login do usuario', () => {
 
 test('exige senha temporaria com ao menos oito caracteres', () => {
   assert.equal(validatePassword('1234567').valid, false);
-  assert.equal(validatePassword('12345678').valid, true);
+  assert.equal(validatePassword('12345678').valid, false);
+  assert.equal(validatePassword('senhaforte').valid, false);
+  assert.equal(validatePassword('senha1234').valid, true);
 });

@@ -51,7 +51,10 @@ export default function Users() {
       success = await updateUser(editingUser.id, formData);
     } else {
       if (!formData.password) { alert('A senha é obrigatória para novos funcionários.'); return; }
-      if (formData.password.length < 8) { alert('A senha deve possuir pelo menos 8 caracteres.'); return; }
+      if (formData.password.length < 8 || !/[A-Za-z]/.test(formData.password) || !/\d/.test(formData.password)) {
+        alert('A senha deve possuir pelo menos 8 caracteres, com letras e numeros.');
+        return;
+      }
       success = await createUser({ ...formData, role: 'operador' });
     }
     if (success) handleCloseModal();

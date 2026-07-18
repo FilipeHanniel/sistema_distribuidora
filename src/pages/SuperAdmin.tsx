@@ -1347,7 +1347,7 @@ export default function SuperAdmin() {
               <input className="form-control" type="password" minLength={8} required value={userForm.password}
                 autoComplete="new-password"
                 onChange={e => setUserForm(p => ({ ...p, password: e.target.value }))} />
-              <small>Minimo de 8 caracteres.</small>
+              <small>Minimo de 8 caracteres, com letras e numeros.</small>
             </div>
             <div className="form-actions compact-actions">
               <button className="btn btn-secondary" type="button" onClick={() => setUserFormMode(null)}>Cancelar</button>

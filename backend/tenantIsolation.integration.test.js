@@ -257,6 +257,37 @@ test('restringe rotas administrativas e permite acesso controlado ao SuperAdmin'
   assert.ok(productsB.payload.every(item => item.establishmentId === 'est-b'));
 });
 
+test('invalida sessao antiga apos troca da propria senha', async () => {
+  const securityNow = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO users (
+      id, username, password, name, role, establishmentId, active, isDeleted, authVersion, createdAt
+    ) VALUES ('security-user-a', 'seguranca', ?, 'Usuario Seguranca', 'operador', 'est-a', 1, 0, 0, ?)
+  `).run(bcrypt.hashSync('senha-segura-123', 4), securityNow);
+
+  const loginSecurity = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'seguranca', password: 'senha-segura-123' },
+  });
+  assert.equal(loginSecurity.status, 200);
+
+  const changed = await request('/api/users/me/password', {
+    token: loginSecurity.payload.token,
+    method: 'PATCH',
+    body: { currentPassword: 'senha-segura-123', newPassword: 'nova-senha-456' },
+  });
+  assert.equal(changed.status, 200);
+
+  const oldSession = await request('/api/session', { token: loginSecurity.payload.token });
+  assert.equal(oldSession.status, 401);
+
+  const newLogin = await request('/api/login', {
+    method: 'POST',
+    body: { establishment: 'loja-a', username: 'seguranca', password: 'nova-senha-456' },
+  });
+  assert.equal(newLogin.status, 200);
+});
+
 test('permite cadastro rapido pelo operador e restringe codigo duplicado ao tenant', async () => {
   const operatorLogin = await request('/api/login', {
     method: 'POST',

@@ -26,8 +26,8 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
       return;
     }
 
-    if (newPassword.length < 8) {
-      setError('A nova senha deve ter pelo menos 8 caracteres.');
+    if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      setError('A nova senha deve ter pelo menos 8 caracteres, com letras e numeros.');
       return;
     }
 
@@ -91,7 +91,7 @@ export default function PasswordModal({ onClose }: PasswordModalProps) {
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Mínimo 8 caracteres"
+                placeholder="Minimo 8 caracteres, letras e numeros"
                 required
               />
             </div>

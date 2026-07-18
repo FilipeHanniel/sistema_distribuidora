@@ -1,7 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const { normalizeEstablishmentCode } = require('./tenantIdentity');
+const { normalizeEstablishmentCode, validatePassword } = require('./tenantIdentity');
 
 const configuredDatabasePath = String(process.env.DATABASE_PATH || '').trim();
 const databasePath = configuredDatabasePath
@@ -569,11 +569,17 @@ const initDB = () => {
   if (!superAdminExists) {
     const salt = bcrypt.genSaltSync(10);
     const isProduction = process.env.NODE_ENV === 'production';
-    const configuredPassword = String(process.env.SUPERADMIN_PASSWORD || '').trim();
+    const superPasswordPlaceholders = new Set(['', 'troque_em_producao']);
+    const configuredPasswordRaw = String(process.env.SUPERADMIN_PASSWORD || '').trim();
+    const configuredPassword = superPasswordPlaceholders.has(configuredPasswordRaw) ? '' : configuredPasswordRaw;
     if (isProduction && (!configuredPassword || configuredPassword === 'troque_em_producao')) {
       throw new Error('SUPERADMIN_PASSWORD seguro e obrigatorio na primeira inicializacao em producao.');
     }
     const SUPERADMIN_PWD = configuredPassword || 'superadmin123';
+    const superPasswordValidation = validatePassword(SUPERADMIN_PWD);
+    if (!superPasswordValidation.valid) {
+      throw new Error(`SUPERADMIN_PASSWORD invalido: ${superPasswordValidation.error}`);
+    }
     db.prepare(`
       INSERT INTO users (id, username, password, name, role, active, isDeleted, createdAt)
       VALUES ('superadmin-uuid-1', 'superadmin', ?, 'Super Administrador', 'superadmin', 1, 0, ?)

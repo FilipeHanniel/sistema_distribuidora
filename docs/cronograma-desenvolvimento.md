@@ -1,6 +1,6 @@
 # Cronograma de Desenvolvimento
 
-Atualizado em: 14/07/2026
+Atualizado em: 17/07/2026
 
 ## Fase 1 - Estabilizacao da base online
 
@@ -85,15 +85,15 @@ Objetivo: melhorar o dia a dia do gestor e operador.
 
 ## Fase 6 - Seguranca e conformidade
 
-Status: pendente
+Status: em andamento
 
 Objetivo: reduzir risco antes de escalar clientes reais.
 
-- Exigir HTTPS em producao.
-- Revisar segredos no `.env`.
-- Criar politica de troca de senha e recuperacao.
+- Exigir HTTPS em producao. Preparado em 17/07/2026 com `ENFORCE_HTTPS`, `trust proxy`, redirecionamento seguro e headers HTTP basicos, dependente de Nginx com `X-Forwarded-Proto`.
+- Revisar segredos no `.env`. Concluido em 17/07/2026 com validacao de `JWT_SECRET` em producao, aviso para `MASTER_PASSWORD`, `ALLOWED_ORIGINS` explicito e checklist em [docs/seguranca-producao.md](seguranca-producao.md).
+- Criar politica de troca de senha e recuperacao. Parcial em 17/07/2026 com regra minima de senha e invalidacao de sessoes antigas apos troca/reset; recuperacao ainda pendente.
 - Melhorar permissoes por perfil.
-- Auditar logs para evitar vazamento de tokens/certificados.
+- Auditar logs para evitar vazamento de tokens/certificados. Concluido em 17/07/2026 com sanitizacao de auditoria e logs de erro de provedores.
 - Criar rotina de backup e restauracao testada.
 - Documentar LGPD basica para dados de clientes/usuarios.
 
@@ -124,10 +124,10 @@ Objetivo: deixar o produto apresentavel e operavel para primeiros clientes.
 
 ## Proximo passo recomendado
 
-Avancar a Fase 5 - Operacao do estabelecimento, mantendo Fiscal e Pagamentos nas pendencias que dependem de ambiente real:
+Avancar a Fase 6 - Seguranca e conformidade antes de escalar clientes reais:
 
-1. Revisar UX final dos relatorios operacionais e do relatorio inteligente em uso real.
-2. Retomar Mercado Pago Point quando houver uma maquininha disponivel.
-3. Retomar homologacao SEFAZ quando houver CNPJ/IE/certificado de empresa.
+1. Melhorar permissoes por perfil.
+2. Criar rotina de backup e restauracao testada.
+3. Documentar LGPD basica para dados de clientes/usuarios.
 
 Configuracao segura para o VPS: [configuracao-producao.md](configuracao-producao.md)
