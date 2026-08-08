@@ -27,6 +27,7 @@ backend/certs/
 backend/private/
 backups/
 tools/sefaz-fake/logs/
+docs/credenciais-teste.local.md
 
 # Editor directories and files
 .vscode/*
